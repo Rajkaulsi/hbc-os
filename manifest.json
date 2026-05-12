@@ -1,0 +1,75 @@
+{
+  "name": "HBC Enterprise Consultant OS",
+  "short_name": "HBC OS",
+  "description": "Victorian building consulting platform — permit assessment, inspections, defect reporting, NCC/AS compliance",
+  "id": "/?source=pwa",
+  "start_url": "./index.html?source=pwa",
+  "scope": "./",
+  "display": "standalone",
+  "display_override": ["window-controls-overlay", "standalone", "minimal-ui"],
+  "orientation": "any",
+  "theme_color": "#0D1B2A",
+  "background_color": "#0D1B2A",
+  "lang": "en-AU",
+  "dir": "ltr",
+  "categories": ["business", "productivity", "utilities"],
+  "icons": [
+    {
+      "src": "icon-192.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "icon-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "icon-192-maskable.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "maskable"
+    },
+    {
+      "src": "icon-512-maskable.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "maskable"
+    }
+  ],
+  "screenshots": [
+    {
+      "src": "icon-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "form_factor": "wide",
+      "label": "HBC OS — main view"
+    }
+  ],
+  "shortcuts": [
+    {
+      "name": "New Inspection",
+      "short_name": "Inspect",
+      "description": "Open Building Inspections tab",
+      "url": "./index.html?tab=16",
+      "icons": [{ "src": "icon-192.png", "sizes": "192x192" }]
+    },
+    {
+      "name": "Admin Checklist",
+      "short_name": "Admin",
+      "description": "Open Permit Application Admin Checklist",
+      "url": "./index.html?tab=5",
+      "icons": [{ "src": "icon-192.png", "sizes": "192x192" }]
+    },
+    {
+      "name": "Knowledge Base",
+      "short_name": "Knowledge",
+      "description": "Open Knowledge Base",
+      "url": "./index.html?tab=15",
+      "icons": [{ "src": "icon-192.png", "sizes": "192x192" }]
+    }
+  ],
+  "prefer_related_applications": false
+}
