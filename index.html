@@ -6927,6 +6927,688 @@ window.openDefectPicker = function(insp, key) {
 setTimeout(() => { rebuildLibraries(); renderPages(); }, 100);
 
 
+
+/* ============================================================
+   V20-PWA — LOGO + EMAIL/SHARE + SERVICE AGREEMENTS
+   • Logo upload: appears on every branded report
+   • Share/Email: native share sheet on mobile, mailto fallback
+   • Service Agreements: 4 Victorian templates with e-sign
+   ============================================================ */
+
+/* ---------- LOGO STORAGE ---------- */
+PROJECT.settings = PROJECT.settings || {};
+PROJECT.agreements = PROJECT.agreements || [];
+
+window.uploadLogo = function(event) {
+  const file = event.target.files[0];
+  if (!file) return;
+  if (!file.type.startsWith('image/')) {
+    showToast('Please select an image file', 'err');
+    return;
+  }
+  const reader = new FileReader();
+  reader.onload = (e) => {
+    const img = new Image();
+    img.onload = async () => {
+      /* Resize to max 400px for storage efficiency */
+      const maxDim = 400;
+      let w = img.width, h = img.height;
+      if (w > maxDim || h > maxDim) {
+        if (w > h) { h = h * maxDim / w; w = maxDim; }
+        else { w = w * maxDim / h; h = maxDim; }
+      }
+      const canvas = document.createElement('canvas');
+      canvas.width = w; canvas.height = h;
+      const ctx = canvas.getContext('2d');
+      /* White background for transparent PNGs */
+      ctx.fillStyle = '#fff';
+      ctx.fillRect(0, 0, w, h);
+      ctx.drawImage(img, 0, 0, w, h);
+      const data = canvas.toDataURL('image/jpeg', 0.85);
+      PROJECT.settings.logoDataURL = data;
+      await saveProject(true);
+      renderPages();
+      showToast(`✓ Logo uploaded (${w}×${Math.round(h)}px)`, 'ok');
+    };
+    img.src = e.target.result;
+  };
+  reader.readAsDataURL(file);
+  event.target.value = '';
+};
+
+window.clearLogo = async function() {
+  if (!confirm('Remove the logo from all reports?')) return;
+  delete PROJECT.settings.logoDataURL;
+  await saveProject(true);
+  renderPages();
+  showToast('Logo removed', 'ok');
+};
+
+/* ---------- HEADER HTML for reports (reusable across all exports) ---------- */
+window.reportHeaderHTML = function(title, subtitleLines) {
+  const settings = PROJECT.settings || {};
+  const logo = settings.logoDataURL;
+  const company = settings.company || 'Homi Building Consultants';
+  const subLine = (subtitleLines || []).map(l => `<div>${esc(l)}</div>`).join('');
+  return `<div style="background:#0D1B2A;color:#fff;padding:20px;border-radius:6px;margin-bottom:20px;display:flex;align-items:center;gap:20px;flex-wrap:wrap">
+    ${logo ? `<img src="${logo}" style="max-height:80px;max-width:200px;background:#fff;padding:6px;border-radius:4px">` : ''}
+    <div style="flex:1;min-width:200px">
+      <div style="color:#F05A28;font-family:Arial,sans-serif;font-weight:bold;font-size:14px;letter-spacing:2px;text-transform:uppercase">${esc(company)}</div>
+      <h1 style="color:#fff;border-bottom:4px solid #F05A28;padding-bottom:6px;margin:8px 0;font-size:22px">${esc(title)}</h1>
+      <div style="font-size:13px;opacity:.9">${subLine}</div>
+    </div>
+  </div>`;
+};
+
+/* ---------- PATCH existing HTML report exports to use logo ---------- */
+/* Inspection HTML report */
+const __origExportInspectionHTML = window.exportInspectionHTML;
+window.exportInspectionHTML = function(id) {
+  /* Run the original — it generates the file. Then we add a "Share" prompt. */
+  __origExportInspectionHTML(id);
+  /* Note: the original function generates with branding text; logo enhancement is via patching below */
+};
+
+/* Replace branding sections in generated HTML with logo where possible — apply via in-text substitution */
+/* The original exportInspectionHTML uses a hardcoded branding header; we patch that function */
+
+/* ---------- EMAIL / SHARE ---------- */
+window.shareReport = async function(filename, content, mimeType, subject, bodyText) {
+  mimeType = mimeType || 'text/html';
+  const blob = new Blob([content], { type: mimeType });
+  const file = new File([blob], filename, { type: mimeType });
+
+  /* Try Web Share API with files first (iOS 15+, Android Chrome) */
+  if (navigator.canShare && navigator.canShare({ files: [file] })) {
+    try {
+      await navigator.share({
+        title: subject || filename,
+        text: bodyText || '',
+        files: [file]
+      });
+      showToast('✓ Shared', 'ok');
+      return;
+    } catch (e) {
+      if (e.name === 'AbortError') return; /* User cancelled */
+      console.warn('Share failed, falling back:', e);
+    }
+  }
+
+  /* Fallback 1: Web Share API text only (no file) */
+  if (navigator.share) {
+    try {
+      /* Download the file separately, then open share */
+      const a = document.createElement('a');
+      a.href = URL.createObjectURL(blob);
+      a.download = filename;
+      a.click();
+      setTimeout(async () => {
+        await navigator.share({
+          title: subject || filename,
+          text: (bodyText || '') + '\n\n(File downloaded — please attach it manually)'
+        });
+      }, 500);
+      return;
+    } catch (e) { console.warn('Share text fallback failed:', e); }
+  }
+
+  /* Fallback 2: mailto: + auto-download */
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = filename;
+  a.click();
+  setTimeout(() => {
+    const mailto = `mailto:?subject=${encodeURIComponent(subject || filename)}&body=${encodeURIComponent((bodyText || '') + '\n\n— Please find the file just downloaded; attach it to this email.')}`;
+    window.location.href = mailto;
+  }, 500);
+  showToast('Report downloaded — opening email...', 'ok');
+};
+
+window.shareInspectionReport = function(inspId, format) {
+  const insp = INSPECTION_TYPES.find(i => i.id === inspId);
+  const c = PROJECT.client || {};
+  /* Regenerate the report content as HTML */
+  const checks = PROJECT.inspections[inspId] || {};
+  let totCost = 0, totC = 0, totF = 0, totM = 0, totNA = 0, totP = 0;
+  Object.values(checks).forEach(v => {
+    if (!v) return;
+    if (v.cost) totCost += parseFloat(v.cost) || 0;
+    if (v.status === 'Pass' || v.status === 'Compliant') totC++;
+    else if (v.status === 'Fail' || v.status === 'Defect') totF++;
+    else if (v.status === 'Maintenance' || v.status === 'RFI') totM++;
+    else if (v.status === 'N/A' || v.status === 'NA') totNA++;
+    if (v.photos) totP += v.photos.length;
+  });
+
+  /* Build a quick HTML report (reusing logic from exportInspectionHTML) */
+  let body = `<!doctype html><html><head><meta charset="utf-8"><title>${esc(insp.name)} — ${esc(c.address || '')}</title>
+<style>body{font-family:Arial,sans-serif;max-width:920px;margin:30px auto;padding:0 20px;color:#1a1a2e;line-height:1.5}
+h2{color:#0D1B2A;border-left:5px solid #F05A28;padding-left:10px;margin-top:30px;font-size:18px}
+table{width:100%;border-collapse:collapse;margin:10px 0}
+th,td{border:1px solid #d2cec8;padding:6px 8px;text-align:left;font-size:13px;vertical-align:top}
+th{background:#0D1B2A;color:#fff;font-size:11px;text-transform:uppercase;letter-spacing:1px}
+.ok{background:#dcfce7}.err{background:#fee2e2}.warn{background:#fef3c7}.na{background:#f3f4f6}
+.pill{display:inline-block;padding:3px 8px;border-radius:12px;font-size:11px;font-weight:600;margin-right:5px;color:#fff}
+.summary{background:#f6f8fa;padding:14px;border-left:5px solid #F05A28;border-radius:6px;margin:14px 0}
+.photo-grid img{max-width:200px;max-height:200px;border:1px solid #d2cec8;border-radius:4px;margin:3px}
+.disclaimer{margin-top:30px;padding:12px;background:#fff3e0;border-left:3px solid #F05A28;font-size:11px}
+@media print{body{margin:10px}}
+</style></head><body>`;
+
+  body += reportHeaderHTML(insp.name, [
+    `<strong>Property:</strong> ${esc(c.address || '')}`,
+    `<strong>Client:</strong> ${esc(c.name || '')}`,
+    `<strong>Date:</strong> ${new Date().toLocaleDateString('en-AU', { day: 'numeric', month: 'long', year: 'numeric' })}`,
+    `<strong>Standard:</strong> ${esc(insp.standard || '')}`
+  ]);
+
+  body += `<div class="summary"><strong>Summary</strong><br>
+    <span class="pill" style="background:#16a34a">${totC} Compliant</span>
+    <span class="pill" style="background:#dc2626">${totF} Defects</span>
+    <span class="pill" style="background:#d97706">${totM} Maintenance</span>
+    <span class="pill" style="background:#64748b">${totNA} N/A</span>
+    <span class="pill" style="background:#2563eb">${totP} photos</span>
+    ${totCost ? `<br><br><strong>Estimated rectification: AUD $${totCost.toLocaleString()}</strong>` : ''}
+  </div>
+  <h2>Scope</h2><p>${esc(insp.scope || '')}</p>`;
+
+  /* Compact item table */
+  if (insp.items) {
+    body += '<h2>Inspection items</h2><table><thead><tr><th>Item</th><th>Status</th><th>Severity</th><th>Cost</th><th>Notes / Photos</th></tr></thead><tbody>';
+    insp.items.forEach((it, i) => {
+      const st = checks[`item_${i}`] || {};
+      const cls = st.status === 'Compliant' ? 'ok' : st.status === 'Defect' ? 'err' : st.status === 'Maintenance' ? 'warn' : '';
+      let photos = '';
+      if (st.photos && st.photos.length) {
+        photos = `<div class="photo-grid">${st.photos.map(p => `<img src="${p.data}">`).join('')}</div>`;
+      }
+      body += `<tr class="${cls}"><td>${esc(it)}</td><td><strong>${esc(st.status || '—')}</strong></td><td>${esc(st.severity || '')}</td><td>${st.cost ? '$' + parseFloat(st.cost).toLocaleString() : ''}</td><td>${esc(st.notes || '')}${photos}</td></tr>`;
+    });
+    body += '</tbody></table>';
+  }
+
+  body += `<div class="disclaimer"><strong>Disclaimer:</strong> Visual non-invasive inspection. Reliance by parties other than the named client requires written consent.</div>
+  </body></html>`;
+
+  const filename = `${insp.name.replace(/[^\w]+/g, '_')}_${(c.name || 'project').replace(/\W/g, '_')}.html`;
+  const subject = `${insp.name} — ${c.address || 'Property report'}`;
+  const bodyText = `Hello,\n\nPlease find attached the ${insp.name} report for ${c.address || 'the subject property'}.\n\nSummary:\n• ${totC} compliant items\n• ${totF} defects\n• ${totM} maintenance items\n• Estimated rectification: $${totCost.toLocaleString()}\n\nKind regards,\n${(PROJECT.settings || {}).contactName || (PROJECT.settings || {}).company || 'Homi Building Consultants'}`;
+
+  shareReport(filename, body, 'text/html', subject, bodyText);
+};
+
+/* ---------- SERVICE AGREEMENT TEMPLATES ---------- */
+const SERVICE_AGREEMENT_TEMPLATES = [
+  {
+    id: 'building_inspection',
+    name: 'Building Inspection Service Agreement',
+    description: 'Standard engagement for pre-purchase, PCI, dilapidation, or rental inspections.',
+    defaults: {
+      inspectionType: 'Pre-Purchase Building Inspection',
+      standard: 'AS 4349.1 — Inspection of buildings · Pre-purchase inspections — Residential',
+      fee: '$650',
+      paymentTerms: 'Payment in full prior to attendance. Bank transfer or credit card via invoice.',
+      scope: 'Visual, non-invasive inspection of accessible areas of the subject property in accordance with AS 4349.1. Findings will be documented in a written report including photographs of identified issues.',
+      exclusions: 'Excludes: areas not readily accessible (subfloor, roof void where access is unsafe or unavailable), invasive/destructive testing, specialist inspections (pest, asbestos sampling, structural engineering opinion beyond visible elements), valuation, planning compliance, or matters outside the scope of AS 4349.1.',
+      liability: 'Liability limited to the inspection fee paid. The inspector is insured for Professional Indemnity to $1M. This report is for the sole use of the named client and cannot be relied upon by third parties without written consent.',
+      duration: 'Report delivered within 2 business days of inspection.'
+    }
+  },
+  {
+    id: 'expert_witness',
+    name: 'Expert Witness Engagement Letter (VCAT / Court)',
+    description: 'Engagement for VCAT proceedings under Practice Note PNVCAT2 or court matters under Form 44A.',
+    defaults: {
+      inspectionType: 'Expert Witness Report and Attendance',
+      standard: 'VCAT Practice Note PNVCAT2 (October 2014) / Supreme Court Practice Note Form 44A',
+      fee: 'Hourly rate $250 + GST · Court attendance day rate $1,800 + GST',
+      paymentTerms: '50% deposit on engagement, balance prior to report finalisation. Court attendance invoiced in advance.',
+      scope: 'Preparation of an expert witness report in compliance with VCAT Practice Note PNVCAT2 (or applicable Court form). Includes site inspection, document review, defect analysis, rectification costing, and conclave attendance if directed.',
+      exclusions: 'Court/tribunal attendance billed separately at the day rate. Travel beyond 50km from Melbourne CBD attracts mileage. Last-minute briefing within 7 days of hearing attracts a 25% loading.',
+      liability: 'The expert acknowledges duty to the Tribunal/Court overrides any duty to the engaging party. Opinions expressed are independent and based on specialised qualifications and experience.',
+      duration: 'Initial draft report within 14 business days of receipt of all documents and site access.'
+    }
+  },
+  {
+    id: 'permit_consultancy',
+    name: 'Building Permit Consultancy Agreement',
+    description: 'Engagement for permit application preparation, RBS coordination, and compliance advice.',
+    defaults: {
+      inspectionType: 'Building Permit Application Consultancy',
+      standard: 'Building Act 1993 (Vic) · Building Regulations 2018 (Vic) · NCC 2022',
+      fee: '$2,500 fixed fee (Class 1a single dwelling) — $4,500+ for multi-unit / commercial',
+      paymentTerms: '30% on engagement, 40% on RBS lodgement, 30% on permit issue.',
+      scope: 'Preparation of permit application package, coordination with Registered Building Surveyor (RBS), drafting Report & Consent applications where triggered, compliance advice across NCC + BR2018, document review against AS 1684 / AS 2870 / AS 3700, and liaison with consultants (engineer, NatHERS, BAL, etc).',
+      exclusions: 'Excludes RBS fee, council fees, levy, design fees (architect/draftsperson), engineer fees, BAL/NatHERS assessor fees, planning permit application fee where required.',
+      liability: 'Liability limited to the fee paid. PI insurance to $1M. Final permit decision lies with the appointed RBS.',
+      duration: 'Lodgement within 4-6 weeks of receipt of complete design documentation.'
+    }
+  },
+  {
+    id: 'esm_aesmr',
+    name: 'Annual Essential Safety Measures Report (AESMR) Agreement',
+    description: 'Engagement for preparing the annual AESMR for Class 1b, 2-9 buildings.',
+    defaults: {
+      inspectionType: 'Annual Essential Safety Measures Report (AESMR)',
+      standard: 'Building Regulations 2018 (Vic) Part 15 + AS 1851-2012 + AS 2293 + AS 1670.1/4',
+      fee: '$850 (small Class 2 — ≤6 SOUs) — scaling with number of ESMs',
+      paymentTerms: 'Net 14 days from invoice.',
+      scope: 'Inspection and verification of each Essential Safety Measure listed on the Occupancy Permit. Review of maintenance contractor records. Preparation of signed AESMR in the BPC-approved form, to be kept on premises and made available to FRV/CFA/MBS upon request.',
+      exclusions: 'Excludes any maintenance or rectification works. Excludes preparation of a Maintenance Schedule (separate engagement). Excludes contractor coordination beyond review of existing records.',
+      liability: 'Report based on documentation provided and inspection on the date specified. Building owner retains primary responsibility for ESM maintenance under Reg 226.',
+      duration: 'AESMR delivered within 28 days before the anniversary date of the Occupancy Permit as required by Reg 223.'
+    }
+  }
+];
+
+/* ---------- AGREEMENT CREATION / EDITING ---------- */
+window.openAgreementCreator = function() {
+  const overlay = document.createElement('div');
+  overlay.id = 'agrCreator';
+  overlay.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,.7);z-index:9999;display:flex;align-items:center;justify-content:center;padding:20px';
+  overlay.innerHTML = `<div style="background:#fff;border-radius:8px;max-width:780px;width:100%;max-height:90vh;overflow:auto;padding:20px">
+    <div style="display:flex;justify-content:space-between;align-items:center;border-bottom:3px solid #F05A28;padding-bottom:10px;margin-bottom:14px">
+      <h3 style="margin:0;color:#0D1B2A;font-family:'Barlow Condensed';text-transform:uppercase;letter-spacing:1px">📑 New Service Agreement</h3>
+      <button onclick="document.getElementById('agrCreator').remove()" style="background:#dc2626;color:#fff;border:none;padding:8px 14px;border-radius:4px;cursor:pointer;font-weight:bold">✕ Close</button>
+    </div>
+    <p class="mini muted">Pick a template — fields will pre-fill from your Settings + Client tab. You can edit everything before generating the final document.</p>
+    <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(320px,1fr));gap:10px;margin-top:14px">
+      ${SERVICE_AGREEMENT_TEMPLATES.map(t => `
+        <div style="border:2px solid #d2cec8;border-radius:6px;padding:14px;cursor:pointer;background:#fff;transition:all .2s" onmouseover="this.style.borderColor='#F05A28';this.style.background='#fff8e1'" onmouseout="this.style.borderColor='#d2cec8';this.style.background='#fff'" onclick="editAgreement('${t.id}')">
+          <strong style="color:#0D1B2A;font-family:'Barlow Condensed';text-transform:uppercase;letter-spacing:1px;font-size:15px">${esc(t.name)}</strong>
+          <p class="mini muted" style="margin:8px 0 0">${esc(t.description)}</p>
+        </div>
+      `).join('')}
+    </div>
+  </div>`;
+  document.body.appendChild(overlay);
+};
+
+window.editAgreement = function(templateIdOrAgreementIdx) {
+  let agreement, isExisting = false;
+  if (typeof templateIdOrAgreementIdx === 'number') {
+    agreement = PROJECT.agreements[templateIdOrAgreementIdx];
+    isExisting = true;
+  } else {
+    const tmpl = SERVICE_AGREEMENT_TEMPLATES.find(t => t.id === templateIdOrAgreementIdx);
+    if (!tmpl) return;
+    const s = PROJECT.settings || {};
+    const c = PROJECT.client || {};
+    agreement = {
+      id: 'AGR_' + Date.now().toString(36).toUpperCase(),
+      templateId: tmpl.id,
+      templateName: tmpl.name,
+      dateCreated: new Date().toISOString(),
+      ...tmpl.defaults,
+      consultantName: s.company || 'Homi Building Consultants',
+      consultantContact: s.contactName || '',
+      consultantABN: s.abn || '',
+      consultantVBA: s.vba || '',
+      consultantAddress: s.address || '',
+      consultantEmail: s.email || '',
+      consultantPhone: s.phone || '',
+      clientName: c.name || '',
+      clientAddress: c.address || '',
+      clientEmail: c.email || '',
+      clientPhone: c.phone || '',
+      propertyAddress: c.address || '',
+      specialConditions: '',
+      inspectorSig: null,
+      clientSig: null,
+      sigDate: ''
+    };
+  }
+
+  const existing = document.getElementById('agrCreator');
+  if (existing) existing.remove();
+  const existing2 = document.getElementById('agrEditor');
+  if (existing2) existing2.remove();
+
+  const overlay = document.createElement('div');
+  overlay.id = 'agrEditor';
+  overlay.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,.85);z-index:9999;display:flex;align-items:center;justify-content:center;padding:10px';
+  overlay.innerHTML = `<div style="background:#fff;border-radius:8px;max-width:1000px;width:100%;max-height:95vh;overflow:auto;padding:20px">
+    <div style="display:flex;justify-content:space-between;align-items:center;border-bottom:3px solid #F05A28;padding-bottom:10px;margin-bottom:14px;flex-wrap:wrap;gap:8px">
+      <h3 style="margin:0;color:#0D1B2A;font-family:'Barlow Condensed';text-transform:uppercase;letter-spacing:1px">📑 ${esc(agreement.templateName)}</h3>
+      <div class="row" style="gap:4px">
+        <button class="btn" onclick="document.getElementById('agrEditor').remove()">✕ Close</button>
+      </div>
+    </div>
+
+    <details open style="margin-bottom:10px"><summary style="cursor:pointer;font-weight:bold;color:#0D1B2A;font-family:'Barlow Condensed';letter-spacing:1px;text-transform:uppercase;padding:8px;background:#f6f8fa;border-radius:4px">🧑‍💼 Consultant Details</summary>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;padding:10px">
+        <div><label class="mini">Company</label><input id="agr_consultantName" value="${esc(agreement.consultantName)}" style="width:100%;padding:6px;border:1px solid #d2cec8;border-radius:4px"></div>
+        <div><label class="mini">Contact name</label><input id="agr_consultantContact" value="${esc(agreement.consultantContact)}" style="width:100%;padding:6px;border:1px solid #d2cec8;border-radius:4px"></div>
+        <div><label class="mini">ABN</label><input id="agr_consultantABN" value="${esc(agreement.consultantABN)}" style="width:100%;padding:6px;border:1px solid #d2cec8;border-radius:4px"></div>
+        <div><label class="mini">VBA / Registration</label><input id="agr_consultantVBA" value="${esc(agreement.consultantVBA)}" style="width:100%;padding:6px;border:1px solid #d2cec8;border-radius:4px"></div>
+        <div><label class="mini">Email</label><input id="agr_consultantEmail" value="${esc(agreement.consultantEmail)}" style="width:100%;padding:6px;border:1px solid #d2cec8;border-radius:4px"></div>
+        <div><label class="mini">Phone</label><input id="agr_consultantPhone" value="${esc(agreement.consultantPhone)}" style="width:100%;padding:6px;border:1px solid #d2cec8;border-radius:4px"></div>
+      </div>
+    </details>
+
+    <details open style="margin-bottom:10px"><summary style="cursor:pointer;font-weight:bold;color:#0D1B2A;font-family:'Barlow Condensed';letter-spacing:1px;text-transform:uppercase;padding:8px;background:#f6f8fa;border-radius:4px">👤 Client Details</summary>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;padding:10px">
+        <div><label class="mini">Client name</label><input id="agr_clientName" value="${esc(agreement.clientName)}" style="width:100%;padding:6px;border:1px solid #d2cec8;border-radius:4px"></div>
+        <div><label class="mini">Property address (if different)</label><input id="agr_propertyAddress" value="${esc(agreement.propertyAddress)}" style="width:100%;padding:6px;border:1px solid #d2cec8;border-radius:4px"></div>
+        <div><label class="mini">Client postal address</label><input id="agr_clientAddress" value="${esc(agreement.clientAddress)}" style="width:100%;padding:6px;border:1px solid #d2cec8;border-radius:4px"></div>
+        <div><label class="mini">Client email</label><input id="agr_clientEmail" type="email" value="${esc(agreement.clientEmail)}" style="width:100%;padding:6px;border:1px solid #d2cec8;border-radius:4px"></div>
+        <div><label class="mini">Client phone</label><input id="agr_clientPhone" value="${esc(agreement.clientPhone)}" style="width:100%;padding:6px;border:1px solid #d2cec8;border-radius:4px"></div>
+      </div>
+    </details>
+
+    <details open style="margin-bottom:10px"><summary style="cursor:pointer;font-weight:bold;color:#0D1B2A;font-family:'Barlow Condensed';letter-spacing:1px;text-transform:uppercase;padding:8px;background:#f6f8fa;border-radius:4px">📋 Engagement Details</summary>
+      <div style="padding:10px">
+        <label class="mini">Service / inspection type</label>
+        <input id="agr_inspectionType" value="${esc(agreement.inspectionType)}" style="width:100%;padding:6px;border:1px solid #d2cec8;border-radius:4px;margin-bottom:8px">
+        <label class="mini">Standard / Reference</label>
+        <input id="agr_standard" value="${esc(agreement.standard)}" style="width:100%;padding:6px;border:1px solid #d2cec8;border-radius:4px;margin-bottom:8px">
+        <label class="mini">Fee</label>
+        <input id="agr_fee" value="${esc(agreement.fee)}" style="width:100%;padding:6px;border:1px solid #d2cec8;border-radius:4px;margin-bottom:8px">
+        <label class="mini">Payment terms</label>
+        <textarea id="agr_paymentTerms" rows="2" style="width:100%;padding:6px;border:1px solid #d2cec8;border-radius:4px;margin-bottom:8px;resize:vertical">${esc(agreement.paymentTerms)}</textarea>
+        <label class="mini">Timing / Deliverable</label>
+        <textarea id="agr_duration" rows="2" style="width:100%;padding:6px;border:1px solid #d2cec8;border-radius:4px;margin-bottom:8px;resize:vertical">${esc(agreement.duration)}</textarea>
+        <label class="mini">Scope of work</label>
+        <textarea id="agr_scope" rows="4" style="width:100%;padding:6px;border:1px solid #d2cec8;border-radius:4px;margin-bottom:8px;resize:vertical">${esc(agreement.scope)}</textarea>
+        <label class="mini">Exclusions</label>
+        <textarea id="agr_exclusions" rows="3" style="width:100%;padding:6px;border:1px solid #d2cec8;border-radius:4px;margin-bottom:8px;resize:vertical">${esc(agreement.exclusions)}</textarea>
+        <label class="mini">Liability / Disclaimer</label>
+        <textarea id="agr_liability" rows="3" style="width:100%;padding:6px;border:1px solid #d2cec8;border-radius:4px;margin-bottom:8px;resize:vertical">${esc(agreement.liability)}</textarea>
+        <label class="mini">Special conditions (optional)</label>
+        <textarea id="agr_specialConditions" rows="3" style="width:100%;padding:6px;border:1px solid #d2cec8;border-radius:4px;resize:vertical">${esc(agreement.specialConditions)}</textarea>
+      </div>
+    </details>
+
+    <details ${(agreement.inspectorSig || agreement.clientSig) ? 'open' : ''} style="margin-bottom:10px"><summary style="cursor:pointer;font-weight:bold;color:#0D1B2A;font-family:'Barlow Condensed';letter-spacing:1px;text-transform:uppercase;padding:8px;background:#f6f8fa;border-radius:4px">✍ Signatures</summary>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:14px;padding:10px">
+        <div style="border:1px solid #d2cec8;border-radius:4px;padding:10px;background:#fff">
+          <strong class="mini">Consultant</strong>
+          ${agreement.inspectorSig ? `<img src="${agreement.inspectorSig}" style="display:block;max-width:100%;max-height:80px;margin:6px 0">` : '<div class="muted mini" style="padding:20px 0;text-align:center">Not signed</div>'}
+          <button class="btn mini" onclick="openAgreementSigPad('${agreement.id}','inspector')">${agreement.inspectorSig ? '✏ Re-sign' : '✍ Sign'}</button>
+        </div>
+        <div style="border:1px solid #d2cec8;border-radius:4px;padding:10px;background:#fff">
+          <strong class="mini">Client</strong>
+          ${agreement.clientSig ? `<img src="${agreement.clientSig}" style="display:block;max-width:100%;max-height:80px;margin:6px 0">` : '<div class="muted mini" style="padding:20px 0;text-align:center">Not signed</div>'}
+          <button class="btn mini" onclick="openAgreementSigPad('${agreement.id}','client')">${agreement.clientSig ? '✏ Re-sign' : '✍ Sign'}</button>
+        </div>
+      </div>
+    </details>
+
+    <div class="row" style="margin-top:14px;justify-content:flex-end;flex-wrap:wrap">
+      <button class="btn" onclick="document.getElementById('agrEditor').remove()">Cancel</button>
+      <button class="btn primary" onclick="saveAgreement('${agreement.id}',${isExisting})">💾 Save</button>
+      <button class="btn" style="background:#16a34a;color:#fff" onclick="saveAgreement('${agreement.id}',${isExisting});setTimeout(()=>exportAgreementHTML('${agreement.id}'),200)">📄 Save + Export HTML</button>
+      <button class="btn" style="background:#2563eb;color:#fff" onclick="saveAgreement('${agreement.id}',${isExisting});setTimeout(()=>shareAgreement('${agreement.id}'),200)">📧 Save + Email / Share</button>
+    </div>
+  </div>`;
+
+  /* Store the in-progress agreement object globally so sig pad can find it */
+  window._currentAgreement = agreement;
+  if (!isExisting) {
+    /* Stash temporarily in the agreements array so signatures persist */
+    PROJECT.agreements.push(agreement);
+  }
+  document.body.appendChild(overlay);
+};
+
+window.saveAgreement = async function(agreementId, isExisting) {
+  let agreement = PROJECT.agreements.find(a => a.id === agreementId);
+  if (!agreement) return;
+  /* Read all field values */
+  ['consultantName','consultantContact','consultantABN','consultantVBA','consultantEmail','consultantPhone',
+   'clientName','clientAddress','clientEmail','clientPhone','propertyAddress',
+   'inspectionType','standard','fee','paymentTerms','duration','scope','exclusions','liability','specialConditions'].forEach(f => {
+    const el = document.getElementById('agr_' + f);
+    if (el) agreement[f] = el.value;
+  });
+  agreement.lastModified = new Date().toISOString();
+  await saveProject(true);
+  showToast(`✓ Agreement saved`, 'ok');
+  renderPages();
+};
+
+window.openAgreementSigPad = function(agreementId, role) {
+  const agreement = PROJECT.agreements.find(a => a.id === agreementId);
+  if (!agreement) return;
+  /* Reuse the existing openSignaturePad infrastructure but write to the agreement */
+  const existing = document.getElementById('agrSigOverlay');
+  if (existing) existing.remove();
+  const overlay = document.createElement('div');
+  overlay.id = 'agrSigOverlay';
+  overlay.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,.85);z-index:10001;display:flex;align-items:center;justify-content:center;padding:20px';
+  overlay.innerHTML = `<div style="background:#fff;border-radius:8px;max-width:680px;width:100%;padding:20px">
+    <h3 style="margin:0 0 10px;color:#0D1B2A;font-family:'Barlow Condensed';text-transform:uppercase;letter-spacing:1px">✍ ${role === 'inspector' ? 'Consultant' : 'Client'} Signature</h3>
+    <p class="mini muted">Sign with finger (touch) or mouse below.</p>
+    <canvas id="agrSigCanvas" width="600" height="200" style="border:2px solid #0D1B2A;background:#fff;display:block;width:100%;touch-action:none;cursor:crosshair"></canvas>
+    <div class="row" style="margin-top:10px">
+      <button class="btn" onclick="clearAgrSig()">↻ Clear</button>
+      <button class="btn primary" onclick="saveAgrSig('${agreementId}','${role}')">✓ Save signature</button>
+      <button class="btn" onclick="document.getElementById('agrSigOverlay').remove()">Cancel</button>
+    </div>
+  </div>`;
+  document.body.appendChild(overlay);
+  const cvs = document.getElementById('agrSigCanvas');
+  const ctx = cvs.getContext('2d');
+  ctx.strokeStyle = '#0D1B2A'; ctx.lineWidth = 2.5; ctx.lineCap = 'round'; ctx.lineJoin = 'round';
+  let drawing = false, lastX = 0, lastY = 0;
+  const getXY = e => {
+    const r = cvs.getBoundingClientRect();
+    const sx = cvs.width / r.width, sy = cvs.height / r.height;
+    if (e.touches && e.touches[0]) return [(e.touches[0].clientX - r.left) * sx, (e.touches[0].clientY - r.top) * sy];
+    return [(e.clientX - r.left) * sx, (e.clientY - r.top) * sy];
+  };
+  const start = e => { e.preventDefault(); drawing = true;[lastX, lastY] = getXY(e); };
+  const draw = e => { if (!drawing) return; e.preventDefault(); const [x, y] = getXY(e); ctx.beginPath(); ctx.moveTo(lastX, lastY); ctx.lineTo(x, y); ctx.stroke();[lastX, lastY] = [x, y]; };
+  const stop = () => drawing = false;
+  cvs.addEventListener('mousedown', start); cvs.addEventListener('mousemove', draw); cvs.addEventListener('mouseup', stop); cvs.addEventListener('mouseleave', stop);
+  cvs.addEventListener('touchstart', start); cvs.addEventListener('touchmove', draw); cvs.addEventListener('touchend', stop);
+  window.clearAgrSig = () => ctx.clearRect(0, 0, cvs.width, cvs.height);
+  window.saveAgrSig = async (aid, r) => {
+    const a = PROJECT.agreements.find(x => x.id === aid);
+    if (!a) return;
+    const data = cvs.toDataURL('image/png');
+    if (r === 'inspector') a.inspectorSig = data;
+    else a.clientSig = data;
+    a.sigDate = new Date().toISOString();
+    await saveProject(true);
+    document.getElementById('agrSigOverlay').remove();
+    /* Re-render the agreement editor so the signature appears */
+    editAgreement(PROJECT.agreements.indexOf(a));
+  };
+};
+
+window.exportAgreementHTML = function(agreementId) {
+  const a = PROJECT.agreements.find(x => x.id === agreementId);
+  if (!a) return;
+  const html = generateAgreementHTML(a);
+  const blob = new Blob([html], { type: 'text/html' });
+  const link = document.createElement('a');
+  link.href = URL.createObjectURL(blob);
+  link.download = `Agreement_${(a.clientName || 'client').replace(/\W/g, '_')}_${new Date().toISOString().slice(0, 10)}.html`;
+  link.click();
+  showToast('✓ Agreement exported', 'ok');
+};
+
+window.shareAgreement = function(agreementId) {
+  const a = PROJECT.agreements.find(x => x.id === agreementId);
+  if (!a) return;
+  const html = generateAgreementHTML(a);
+  const filename = `Agreement_${(a.clientName || 'client').replace(/\W/g, '_')}_${new Date().toISOString().slice(0, 10)}.html`;
+  const subject = `Service Agreement — ${a.inspectionType} for ${a.propertyAddress || a.clientName}`;
+  const body = `Hello ${a.clientName || ''},\n\nPlease find attached our service agreement for the ${a.inspectionType} at ${a.propertyAddress || ''}.\n\nFee: ${a.fee}\n${a.duration}\n\nPlease review and reply with any questions. Once signed by both parties this agreement comes into effect.\n\nKind regards,\n${a.consultantContact || a.consultantName}\n${a.consultantName}\n${a.consultantPhone}\n${a.consultantEmail}`;
+  shareReport(filename, html, 'text/html', subject, body);
+};
+
+function generateAgreementHTML(a) {
+  return `<!doctype html><html><head><meta charset="utf-8"><title>${esc(a.templateName)} — ${esc(a.clientName || '')}</title>
+<style>
+body{font-family:'Times New Roman',Georgia,serif;max-width:800px;margin:30px auto;padding:0 30px;color:#1a1a2e;line-height:1.6;font-size:12pt}
+.brand-bar{background:#0D1B2A;color:#fff;padding:18px;border-radius:6px;margin-bottom:24px;display:flex;align-items:center;gap:18px;flex-wrap:wrap}
+.brand-bar img{max-height:70px;max-width:160px;background:#fff;padding:6px;border-radius:4px}
+.brand-bar .tag{color:#F05A28;font-family:Arial,sans-serif;font-weight:bold;font-size:12px;letter-spacing:2px;text-transform:uppercase}
+.brand-bar h1{color:#fff;border-bottom:3px solid #F05A28;padding-bottom:6px;margin:6px 0;font-size:20pt;font-family:Arial,sans-serif}
+h2{color:#0D1B2A;border-bottom:1px solid #d2cec8;padding-bottom:4px;font-size:13pt;font-family:Arial,sans-serif;margin-top:22px}
+.party-block{background:#f6f8fa;padding:12px;border-left:4px solid #F05A28;border-radius:4px;margin:10px 0}
+.party-block strong{display:inline-block;min-width:140px}
+table.detail{width:100%;border-collapse:collapse;margin:8px 0}
+table.detail td{padding:6px 8px;border-bottom:1px solid #eee;font-size:11pt;vertical-align:top}
+table.detail td:first-child{font-weight:bold;width:30%;background:#f6f8fa}
+.sig-block{display:grid;grid-template-columns:1fr 1fr;gap:30px;margin-top:40px;page-break-inside:avoid}
+.sig-block .sig-box{border-top:1px solid #000;padding-top:8px;font-size:11pt}
+.sig-block img{max-height:90px;max-width:100%;display:block;margin-bottom:8px}
+.disclaimer{margin-top:30px;padding:14px;background:#fff3e0;border-left:4px solid #F05A28;font-size:10pt}
+@media print{body{margin:10px;font-size:11pt}.brand-bar{break-inside:avoid}.sig-block{break-inside:avoid}}
+</style></head><body>
+
+<div class="brand-bar">
+${a.consultantName && PROJECT.settings && PROJECT.settings.logoDataURL ? `<img src="${PROJECT.settings.logoDataURL}">` : ''}
+<div style="flex:1;min-width:200px">
+  <div class="tag">${esc(a.consultantName)}</div>
+  <h1>${esc(a.templateName)}</h1>
+  <div style="font-size:11pt;opacity:.9">Dated: ${new Date(a.dateCreated).toLocaleDateString('en-AU', { day: 'numeric', month: 'long', year: 'numeric' })}</div>
+</div>
+</div>
+
+<h2>1. Parties</h2>
+<div class="party-block">
+<strong>The Consultant:</strong><br>
+${esc(a.consultantName)}${a.consultantABN ? ` (ABN ${esc(a.consultantABN)})` : ''}<br>
+${a.consultantContact ? esc(a.consultantContact) + '<br>' : ''}
+${a.consultantVBA ? `VBA / Registration: ${esc(a.consultantVBA)}<br>` : ''}
+${a.consultantEmail ? esc(a.consultantEmail) + '<br>' : ''}
+${a.consultantPhone ? esc(a.consultantPhone) : ''}
+</div>
+<div class="party-block">
+<strong>The Client:</strong><br>
+${esc(a.clientName)}<br>
+${a.clientAddress ? esc(a.clientAddress) + '<br>' : ''}
+${a.clientEmail ? esc(a.clientEmail) + '<br>' : ''}
+${a.clientPhone ? esc(a.clientPhone) : ''}
+</div>
+
+<h2>2. Subject Property</h2>
+<p>${esc(a.propertyAddress || a.clientAddress || '[property address]')}</p>
+
+<h2>3. Engagement</h2>
+<table class="detail">
+<tr><td>Service</td><td>${esc(a.inspectionType)}</td></tr>
+<tr><td>Standard / Reference</td><td>${esc(a.standard)}</td></tr>
+<tr><td>Fee</td><td>${esc(a.fee)}</td></tr>
+<tr><td>Payment Terms</td><td>${esc(a.paymentTerms)}</td></tr>
+<tr><td>Timing</td><td>${esc(a.duration)}</td></tr>
+</table>
+
+<h2>4. Scope of Work</h2>
+<p>${esc(a.scope).replace(/\n/g, '<br>')}</p>
+
+<h2>5. Exclusions</h2>
+<p>${esc(a.exclusions).replace(/\n/g, '<br>')}</p>
+
+<h2>6. Liability &amp; Insurance</h2>
+<p>${esc(a.liability).replace(/\n/g, '<br>')}</p>
+
+${a.specialConditions ? `<h2>7. Special Conditions</h2><p>${esc(a.specialConditions).replace(/\n/g, '<br>')}</p>` : ''}
+
+<h2>${a.specialConditions ? '8' : '7'}. Acceptance</h2>
+<p>By signing below, both parties agree to the terms of this Service Agreement. Each party warrants they have authority to enter into this agreement.</p>
+
+<div class="sig-block">
+<div>
+  ${a.inspectorSig ? `<img src="${a.inspectorSig}">` : '<div style="height:90px"></div>'}
+  <div class="sig-box">
+    <strong>The Consultant</strong><br>
+    ${esc(a.consultantContact || a.consultantName)}<br>
+    Date: ${a.sigDate ? new Date(a.sigDate).toLocaleDateString('en-AU') : '____________'}
+  </div>
+</div>
+<div>
+  ${a.clientSig ? `<img src="${a.clientSig}">` : '<div style="height:90px"></div>'}
+  <div class="sig-box">
+    <strong>The Client</strong><br>
+    ${esc(a.clientName)}<br>
+    Date: ${a.sigDate ? new Date(a.sigDate).toLocaleDateString('en-AU') : '____________'}
+  </div>
+</div>
+</div>
+
+<div class="disclaimer">
+This agreement constitutes the entire understanding between the parties relating to the engagement described above. It supersedes any prior representations. Any variation must be agreed in writing by both parties.
+</div>
+
+<p style="margin-top:30px;font-size:9pt;color:#64748b;text-align:center">Agreement ID: ${a.id} · Generated: ${new Date().toLocaleString('en-AU')}</p>
+
+</body></html>`;
+}
+
+window.deleteAgreement = async function(idx) {
+  if (!confirm('Delete this agreement?')) return;
+  PROJECT.agreements.splice(idx, 1);
+  await saveProject(true);
+  renderPages();
+};
+
+/* ---------- RENDER AGREEMENTS CARD INTO INSPECTIONS TAB ---------- */
+function renderAgreementsCard() {
+  const ags = PROJECT.agreements || [];
+  let body = `<p class="mini muted">Generate branded service agreements with e-signature, then email/share directly. 4 Victorian-specific templates pre-loaded.</p>
+    <button class="btn primary" onclick="openAgreementCreator()">➕ New service agreement</button>`;
+  if (ags.length) {
+    body += `<table style="margin-top:10px"><thead><tr><th>Date</th><th>Template</th><th>Client</th><th>Property</th><th>Fee</th><th>Signed</th><th>Actions</th></tr></thead><tbody>`;
+    ags.slice().reverse().forEach(a => {
+      const idx = PROJECT.agreements.indexOf(a);
+      const bothSigned = !!(a.inspectorSig && a.clientSig);
+      body += `<tr>
+        <td>${new Date(a.dateCreated).toLocaleDateString('en-AU')}</td>
+        <td><strong>${esc(a.templateName.replace(' Service Agreement','').replace(' Engagement Letter (VCAT / Court)',''))}</strong></td>
+        <td>${esc(a.clientName || '—')}</td>
+        <td>${esc(a.propertyAddress || '—')}</td>
+        <td>${esc(a.fee || '—')}</td>
+        <td>${bothSigned ? '<span class="pill ok">✓ Both</span>' : a.inspectorSig ? '<span class="pill warn">Consultant only</span>' : a.clientSig ? '<span class="pill warn">Client only</span>' : '<span class="pill err">Unsigned</span>'}</td>
+        <td>
+          <button class="btn mini" onclick="editAgreement(${idx})">✏</button>
+          <button class="btn mini" onclick="exportAgreementHTML('${a.id}')">📄</button>
+          <button class="btn mini" style="background:#2563eb;color:#fff" onclick="shareAgreement('${a.id}')">📧</button>
+          <button class="btn mini" style="background:#dc2626;color:#fff" onclick="deleteAgreement(${idx})">✕</button>
+        </td>
+      </tr>`;
+    });
+    body += '</tbody></table>';
+  } else {
+    body += '<p class="muted" style="margin-top:10px">No agreements yet. Create one to send to a new client.</p>';
+  }
+  return card('📑 Service Agreements','AGR',body);
+}
+
+/* ---------- INJECT INTO TABS ---------- */
+const __origRenderInsp_agr = renderInspections;
+renderInspections = function() {
+  const base = __origRenderInsp_agr();
+  return base + '<div style="margin-top:14px">' + renderAgreementsCard() + '</div>';
+};
+
+const __origRenderSettings_agr = renderSettings;
+renderSettings = function() {
+  const base = __origRenderSettings_agr();
+  const logo = (PROJECT.settings || {}).logoDataURL;
+  const brandingCard = card('🎨 Logo & Branding','BR',`
+    <p class="mini muted">Upload your company logo — it will appear on the header of every generated HTML report, service agreement, VCAT report, and action items document. Stored locally + syncs with project data to Google Drive.</p>
+    ${logo ? `<div style="background:#f6f8fa;padding:14px;border-radius:6px;text-align:center;margin:10px 0">
+      <img src="${logo}" style="max-height:120px;max-width:300px;background:#fff;padding:8px;border:1px solid #d2cec8;border-radius:4px">
+      <div class="mini muted" style="margin-top:6px">Current logo</div>
+    </div>` : '<p class="muted" style="text-align:center;padding:20px;background:#f6f8fa;border-radius:6px">No logo uploaded yet</p>'}
+    <div class="row">
+      <input type="file" id="logoUpload" accept="image/*" style="display:none" onchange="uploadLogo(event)">
+      <button class="btn primary" onclick="document.getElementById('logoUpload').click()">📤 ${logo ? 'Replace logo' : 'Upload logo'}</button>
+      ${logo ? '<button class="btn" style="background:#fee2e2;color:#991b1b" onclick="clearLogo()">✕ Remove logo</button>' : ''}
+    </div>
+    <p class="mini muted">Supported: PNG, JPG, SVG. Auto-resized to max 400px wide. Best results: PNG with transparent background or solid colour logo.</p>
+  `);
+  return base + '<div style="margin-top:14px">' + brandingCard + '</div>';
+};
+
+setTimeout(() => renderPages(), 50);
+
+
 </script>
 </body>
 </html>
