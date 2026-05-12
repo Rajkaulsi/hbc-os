@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=5,viewport-fit=cover">
-<title>HBC OS — Building Consultant</title>
+<title>HBC OS V20-PWA — Building Consultant</title>
 
 <!-- ============ PWA META ============ -->
 <link rel="manifest" href="manifest.json">
@@ -640,7 +640,13 @@ function renderSettings(){
   return `<div class="mentor"><b>AI Provider Routing.</b> Each AI is independently configured. Pick the right model for the right job: Google for plan/OCR, Claude for long-document reasoning, ChatGPT for structured assessment.</div>
   <div class="g3">${AI_PROVIDERS.map(p=>card(p.name,p.id.toUpperCase(),`
     <div class="field"><label>Enabled</label><select onchange="PROJECT.settings.ai.${p.id}.enabled=this.value==='Yes'"><option ${PROJECT.settings.ai[p.id].enabled?'selected':''}>Yes</option><option ${!PROJECT.settings.ai[p.id].enabled?'selected':''}>No</option></select></div>
-    <div class="field"><label>API Key / Connection</label><input type="password" placeholder="Stored locally only" oninput="PROJECT.settings.ai.${p.id}.key=this.value"></div>
+    <div class="field"><label>API Key / Connection ${PROJECT.settings.ai[p.id].key?'<span style="color:#16a34a;font-weight:bold">✓ Saved</span>':'<span style="color:#dc2626">✗ Empty</span>'}</label>
+      <div style="display:flex;gap:4px">
+        <input id="apikey_${p.id}" type="password" placeholder="Paste key here" value="${esc(PROJECT.settings.ai[p.id].key||'')}" oninput="PROJECT.settings.ai.${p.id}.key=this.value" style="flex:1">
+        <button class="btn" style="padding:4px 8px" onclick="const i=document.getElementById('apikey_${p.id}');i.type=i.type==='password'?'text':'password'" title="Show / hide key">👁</button>
+        ${PROJECT.settings.ai[p.id].key?`<button class="btn" style="padding:4px 8px;background:#fee2e2;color:#991b1b" onclick="if(confirm('Clear this API key?')){PROJECT.settings.ai.${p.id}.key='';renderPages()}" title="Clear">✕</button>`:''}
+      </div>
+    </div>
     <div class="field"><label>Model</label><select onchange="PROJECT.settings.ai.${p.id}.model=this.value">${p.models.map(m=>`<option ${PROJECT.settings.ai[p.id].model===m?'selected':''}>${m}</option>`).join('')}</select></div>
     <div class="mini"><b>Best for:</b> ${p.best}</div>
   `)).join('')}</div>
@@ -5961,12 +5967,14 @@ window.initGoogleDrive = function() {
               client_id: clientId,
               scope: GDRIVE_SCOPES,
               callback: (resp) => {
-                if (resp.error) { console.error(resp); return; }
+                if (resp.error) { console.error(resp); showToast('Sign-in error: ' + resp.error, 'err'); return; }
                 driveAccessToken = resp.access_token;
                 gapi.client.setToken({ access_token: resp.access_token });
                 localStorage.setItem('hbc_gdrive_token_ts', Date.now().toString());
                 updateSyncIndicator('Google Drive connected');
                 showToast('☁ Google Drive connected', 'ok');
+                /* Refresh Settings page so green ✅ Connected status appears */
+                if (typeof renderPages === 'function') renderPages();
               }
             });
             gisInited = true;
@@ -6017,6 +6025,7 @@ window.driveSignOut = function() {
     localStorage.removeItem('hbc_gdrive_token_ts');
     updateSyncIndicator('Local only');
     showToast('Signed out of Google Drive', 'ok');
+    if (typeof renderPages === 'function') renderPages();
   }
 };
 
@@ -6324,6 +6333,598 @@ setTimeout(() => {
     setTimeout(() => goTab(tab), 200);
   }
 })();
+
+
+/* ============================================================
+   V20-PWA — LIBRARY & TEMPLATE EDITORS
+   • Custom defects: add to existing or new categories
+   • Custom inspection templates: create new or clone existing
+   • Edit / delete custom entries (built-ins are read-only)
+   • Export / import as JSON for sharing between users
+   • Persists via IndexedDB + Google Drive sync (auto)
+   ============================================================ */
+
+/* PROJECT extension */
+PROJECT.customDefects = PROJECT.customDefects || [];          /* [{cat,desc,ref,sev,trade,cost}] */
+PROJECT.customInspectionTypes = PROJECT.customInspectionTypes || []; /* [{id,cat,name,when,standard,scope,deliverable,items,typicalFee}] */
+
+/* ---------- REBUILD LIBRARIES — merge built-ins + customisations ---------- */
+function rebuildLibraries() {
+  /* Remove previously-injected custom entries from DEFECT_LIBRARY */
+  DEFECT_LIBRARY.forEach(cat => {
+    cat.issues = cat.issues.filter(i => !i._custom);
+  });
+  /* Drop any empty custom-only categories */
+  for (let i = DEFECT_LIBRARY.length - 1; i >= 0; i--) {
+    if (DEFECT_LIBRARY[i]._customCat && DEFECT_LIBRARY[i].issues.length === 0) {
+      DEFECT_LIBRARY.splice(i, 1);
+    }
+  }
+  /* Add fresh custom defects, grouped by category */
+  (PROJECT.customDefects || []).forEach((d, idx) => {
+    let cat = DEFECT_LIBRARY.find(c => c.cat === d.cat);
+    if (!cat) {
+      cat = { cat: d.cat, issues: [], _customCat: true };
+      DEFECT_LIBRARY.push(cat);
+    }
+    cat.issues.push({
+      desc: d.desc, ref: d.ref, sev: d.sev, trade: d.trade, cost: d.cost,
+      _custom: true, _idx: idx
+    });
+  });
+
+  /* Inspection types — remove and re-add custom */
+  for (let i = INSPECTION_TYPES.length - 1; i >= 0; i--) {
+    if (INSPECTION_TYPES[i]._custom) INSPECTION_TYPES.splice(i, 1);
+  }
+  (PROJECT.customInspectionTypes || []).forEach(insp => {
+    INSPECTION_TYPES.push({ ...insp, _custom: true });
+  });
+}
+
+/* Run rebuild on startup + after every loadProject */
+rebuildLibraries();
+const __origLoadProject_lib = window.loadProject;
+window.loadProject = async function(silent) {
+  const r = await __origLoadProject_lib(silent);
+  PROJECT.customDefects = PROJECT.customDefects || [];
+  PROJECT.customInspectionTypes = PROJECT.customInspectionTypes || [];
+  rebuildLibraries();
+  renderPages();
+  return r;
+};
+
+/* ============================================================
+   DEFECTS LIBRARY MANAGER UI
+   ============================================================ */
+window.openDefectLibraryManager = function() {
+  const existing = document.getElementById('defectMgrOverlay');
+  if (existing) existing.remove();
+  const overlay = document.createElement('div');
+  overlay.id = 'defectMgrOverlay';
+  overlay.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,.7);z-index:9999;display:flex;align-items:center;justify-content:center;padding:20px';
+  overlay.innerHTML = `<div style="background:#fff;border-radius:8px;max-width:1100px;width:100%;max-height:90vh;overflow:auto;padding:20px;display:flex;flex-direction:column">
+    <div style="display:flex;justify-content:space-between;align-items:center;border-bottom:3px solid #F05A28;padding-bottom:10px;margin-bottom:14px;flex-wrap:wrap;gap:8px">
+      <div>
+        <h3 style="margin:0;color:#0D1B2A;font-family:'Barlow Condensed';text-transform:uppercase;letter-spacing:1px">🛠 Defects Library Manager</h3>
+        <span class="mini muted" id="defectMgrCount">Loading...</span>
+      </div>
+      <button onclick="document.getElementById('defectMgrOverlay').remove()" style="background:#dc2626;color:#fff;border:none;padding:8px 14px;border-radius:4px;cursor:pointer;font-weight:bold">✕ Close</button>
+    </div>
+    <div class="row" style="margin-bottom:10px;flex-wrap:wrap">
+      <button class="btn primary" onclick="openDefectEditor()">➕ Add new defect</button>
+      <button class="btn" onclick="exportCustomDefects()">⬇ Export custom defects (JSON)</button>
+      <button class="btn" onclick="document.getElementById('importDefectsFile').click()">⬆ Import defects (JSON)</button>
+      <input type="file" id="importDefectsFile" accept=".json" style="display:none" onchange="importCustomDefects(event)">
+      <input id="defectMgrFilter" placeholder="🔍 Filter by description, category, ref..." oninput="renderDefectMgrList()" style="flex:1;min-width:200px;padding:6px 10px;border:1px solid #d2cec8;border-radius:4px">
+      <select id="defectMgrSrc" onchange="renderDefectMgrList()" style="padding:6px;border:1px solid #d2cec8;border-radius:4px">
+        <option value="all">All (built-in + custom)</option>
+        <option value="custom">Custom only</option>
+        <option value="builtin">Built-in only</option>
+      </select>
+    </div>
+    <div id="defectMgrList" style="flex:1;overflow-y:auto"></div>
+  </div>`;
+  document.body.appendChild(overlay);
+  renderDefectMgrList();
+};
+
+window.renderDefectMgrList = function() {
+  const filter = (document.getElementById('defectMgrFilter')?.value || '').toLowerCase();
+  const src = document.getElementById('defectMgrSrc')?.value || 'all';
+  let html = '';
+  let totalShown = 0, totalCustom = 0, totalBuiltin = 0;
+
+  DEFECT_LIBRARY.forEach((cat, ci) => {
+    const matching = cat.issues.filter(it => {
+      if (src === 'custom' && !it._custom) return false;
+      if (src === 'builtin' && it._custom) return false;
+      if (!filter) return true;
+      return it.desc.toLowerCase().includes(filter)
+          || (it.ref || '').toLowerCase().includes(filter)
+          || cat.cat.toLowerCase().includes(filter)
+          || (it.trade || '').toLowerCase().includes(filter);
+    });
+    if (!matching.length) return;
+    matching.forEach(it => { if (it._custom) totalCustom++; else totalBuiltin++; totalShown++; });
+
+    html += `<div style="margin-bottom:10px;border:1px solid #d2cec8;border-radius:6px;overflow:hidden">
+      <div style="background:#0D1B2A;color:#fff;padding:6px 10px;font-family:'Barlow Condensed';text-transform:uppercase;letter-spacing:1px;display:flex;justify-content:space-between;align-items:center">
+        <span><strong>${esc(cat.cat)}</strong> ${cat._customCat ? '<span style="background:#F05A28;color:#fff;padding:1px 6px;border-radius:8px;font-size:9px;margin-left:6px">CUSTOM CATEGORY</span>' : ''}</span>
+        <span class="mini" style="background:rgba(255,255,255,.15);padding:2px 8px;border-radius:10px">${matching.length}</span>
+      </div>
+      <div style="padding:6px">`;
+
+    matching.forEach((it) => {
+      const sevNum = parseInt(it.sev) || 0;
+      const sevColor = sevNum >= 5 ? '#dc2626' : sevNum >= 4 ? '#ea580c' : sevNum >= 3 ? '#d97706' : sevNum >= 2 ? '#65a30d' : '#6b7280';
+      html += `<div style="display:grid;grid-template-columns:1fr auto;gap:8px;padding:8px;border-bottom:1px solid #f0eee8;background:${it._custom ? '#fff8e1' : '#fff'}">
+        <div>
+          <strong style="font-size:13px">${esc(it.desc)}</strong>
+          ${it._custom ? '<span style="background:#F05A28;color:#fff;padding:1px 6px;border-radius:8px;font-size:9px;margin-left:6px">CUSTOM</span>' : '<span style="background:#94a3b8;color:#fff;padding:1px 6px;border-radius:8px;font-size:9px;margin-left:6px">BUILT-IN</span>'}
+          <br>
+          <span class="mini" style="color:${sevColor};font-weight:bold">⬤ ${esc(it.sev)}</span>
+          <span class="mini muted"> · 📘 ${esc(it.ref || '—')}</span>
+          <span class="mini muted"> · 🔧 ${esc(it.trade || '—')}</span>
+          <span class="mini muted"> · 💰 ${esc(it.cost || '—')}</span>
+        </div>
+        <div style="display:flex;gap:4px;align-items:center">
+          ${it._custom
+            ? `<button class="btn mini" onclick="editCustomDefect(${it._idx})" title="Edit">✏</button>
+               <button class="btn mini" style="background:#dc2626;color:#fff" onclick="deleteCustomDefect(${it._idx})" title="Delete">✕</button>`
+            : `<button class="btn mini" onclick="cloneToCustom(\`${esc(cat.cat)}\`,\`${esc(it.desc).replace(/\`/g,'')}\`)" title="Clone & customise">📋</button>`}
+        </div>
+      </div>`;
+    });
+
+    html += '</div></div>';
+  });
+
+  document.getElementById('defectMgrList').innerHTML = html || '<p class="muted" style="padding:20px;text-align:center">No defects match.</p>';
+  document.getElementById('defectMgrCount').textContent = `Showing ${totalShown} (${totalCustom} custom · ${totalBuiltin} built-in) of ${DEFECT_LIBRARY.reduce((s,c)=>s+c.issues.length,0)} total`;
+};
+
+window.openDefectEditor = function(editIdx) {
+  const existing = document.getElementById('defectEditOverlay');
+  if (existing) existing.remove();
+
+  const isEdit = typeof editIdx === 'number';
+  const d = isEdit ? PROJECT.customDefects[editIdx] : { cat: '', desc: '', ref: '', sev: '3 Moderate', trade: '', cost: '' };
+  const existingCats = [...new Set(DEFECT_LIBRARY.map(c => c.cat))].sort();
+
+  const overlay = document.createElement('div');
+  overlay.id = 'defectEditOverlay';
+  overlay.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,.8);z-index:10000;display:flex;align-items:center;justify-content:center;padding:20px';
+  overlay.innerHTML = `<div style="background:#fff;border-radius:8px;max-width:680px;width:100%;max-height:90vh;overflow:auto;padding:20px">
+    <h3 style="margin:0 0 10px;color:#0D1B2A;font-family:'Barlow Condensed';text-transform:uppercase;letter-spacing:1px;border-bottom:3px solid #F05A28;padding-bottom:8px">${isEdit ? '✏ Edit' : '➕ Add'} Defect</h3>
+
+    <label style="display:block;margin-top:10px;font-weight:bold;font-size:12px;color:#0D1B2A">Category (existing or new)</label>
+    <input id="defEditCat" list="defEditCatList" value="${esc(d.cat)}" placeholder="e.g. Roofing (Tiles, Sheet, Flashings, Gutters) — or type a new category" style="width:100%;padding:8px;border:1px solid #d2cec8;border-radius:4px;margin-top:4px">
+    <datalist id="defEditCatList">${existingCats.map(c => `<option value="${esc(c)}">`).join('')}</datalist>
+
+    <label style="display:block;margin-top:10px;font-weight:bold;font-size:12px;color:#0D1B2A">Defect description *</label>
+    <textarea id="defEditDesc" rows="2" placeholder="e.g. Roof tile broken / cracked from normal viewing position" style="width:100%;padding:8px;border:1px solid #d2cec8;border-radius:4px;margin-top:4px;resize:vertical">${esc(d.desc)}</textarea>
+
+    <label style="display:block;margin-top:10px;font-weight:bold;font-size:12px;color:#0D1B2A">Standard / Reference</label>
+    <input id="defEditRef" value="${esc(d.ref)}" placeholder="e.g. VBA Guide 6.03 / AS 2050 / NCC H2" style="width:100%;padding:8px;border:1px solid #d2cec8;border-radius:4px;margin-top:4px">
+
+    <label style="display:block;margin-top:10px;font-weight:bold;font-size:12px;color:#0D1B2A">Severity</label>
+    <select id="defEditSev" style="width:100%;padding:8px;border:1px solid #d2cec8;border-radius:4px;margin-top:4px">
+      ${['1 Negligible','2 Minor','3 Moderate','4 Major','5 Urgent / Safety'].map(s => `<option ${d.sev === s ? 'selected' : ''}>${s}</option>`).join('')}
+    </select>
+
+    <label style="display:block;margin-top:10px;font-weight:bold;font-size:12px;color:#0D1B2A">Recommended trade</label>
+    <input id="defEditTrade" value="${esc(d.trade)}" placeholder="e.g. Roof Tiler / Builder / Structural Engineer" style="width:100%;padding:8px;border:1px solid #d2cec8;border-radius:4px;margin-top:4px">
+
+    <label style="display:block;margin-top:10px;font-weight:bold;font-size:12px;color:#0D1B2A">Indicative cost range (AUD)</label>
+    <input id="defEditCost" value="${esc(d.cost)}" placeholder="e.g. $300–$2,500" style="width:100%;padding:8px;border:1px solid #d2cec8;border-radius:4px;margin-top:4px">
+
+    <div class="row" style="margin-top:14px;justify-content:flex-end">
+      <button class="btn" onclick="document.getElementById('defectEditOverlay').remove()">Cancel</button>
+      <button class="btn primary" onclick="saveDefectFromEditor(${isEdit ? editIdx : -1})">${isEdit ? '✓ Update' : '✓ Add to library'}</button>
+    </div>
+  </div>`;
+  document.body.appendChild(overlay);
+  document.getElementById('defEditDesc').focus();
+};
+
+window.saveDefectFromEditor = async function(editIdx) {
+  const cat = document.getElementById('defEditCat').value.trim();
+  const desc = document.getElementById('defEditDesc').value.trim();
+  const ref = document.getElementById('defEditRef').value.trim();
+  const sev = document.getElementById('defEditSev').value;
+  const trade = document.getElementById('defEditTrade').value.trim();
+  const cost = document.getElementById('defEditCost').value.trim();
+
+  if (!cat) { alert('Category is required'); return; }
+  if (!desc) { alert('Defect description is required'); return; }
+
+  const entry = { cat, desc, ref, sev, trade, cost };
+  if (editIdx >= 0) {
+    PROJECT.customDefects[editIdx] = entry;
+  } else {
+    PROJECT.customDefects.push(entry);
+  }
+  rebuildLibraries();
+  await saveProject(true);
+  document.getElementById('defectEditOverlay').remove();
+  renderDefectMgrList();
+  showToast(`✓ Defect ${editIdx >= 0 ? 'updated' : 'added'}`, 'ok');
+};
+
+window.editCustomDefect = function(idx) { openDefectEditor(idx); };
+
+window.deleteCustomDefect = async function(idx) {
+  const d = PROJECT.customDefects[idx];
+  if (!confirm(`Delete this defect?\n\n"${d.desc}"`)) return;
+  PROJECT.customDefects.splice(idx, 1);
+  rebuildLibraries();
+  await saveProject(true);
+  renderDefectMgrList();
+  showToast('Deleted', 'ok');
+};
+
+window.cloneToCustom = function(catName, descSnippet) {
+  const cat = DEFECT_LIBRARY.find(c => c.cat === catName);
+  if (!cat) return;
+  const issue = cat.issues.find(i => i.desc === descSnippet);
+  if (!issue) return;
+  PROJECT.customDefects.push({
+    cat: catName,
+    desc: '[COPY] ' + issue.desc,
+    ref: issue.ref,
+    sev: issue.sev,
+    trade: issue.trade,
+    cost: issue.cost
+  });
+  rebuildLibraries();
+  saveProject(true);
+  openDefectEditor(PROJECT.customDefects.length - 1);
+};
+
+window.exportCustomDefects = function() {
+  if (!PROJECT.customDefects.length) {
+    showToast('No custom defects to export', 'warn');
+    return;
+  }
+  const data = {
+    version: 'V20-PWA',
+    type: 'HBC_Custom_Defects',
+    exportedAt: new Date().toISOString(),
+    count: PROJECT.customDefects.length,
+    defects: PROJECT.customDefects
+  };
+  const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = `HBC_Custom_Defects_${new Date().toISOString().slice(0,10)}.json`;
+  a.click();
+  showToast(`✓ Exported ${PROJECT.customDefects.length} defects`, 'ok');
+};
+
+window.importCustomDefects = function(event) {
+  const file = event.target.files[0];
+  if (!file) return;
+  const reader = new FileReader();
+  reader.onload = async (e) => {
+    try {
+      const data = JSON.parse(e.target.result);
+      if (data.type !== 'HBC_Custom_Defects' || !Array.isArray(data.defects)) {
+        alert('Not a valid HBC defects export file');
+        return;
+      }
+      const mode = confirm(`Import ${data.defects.length} defects?\n\nOK = MERGE (add to existing custom defects)\nCancel = REPLACE all custom defects`);
+      if (mode) {
+        PROJECT.customDefects = PROJECT.customDefects.concat(data.defects);
+      } else {
+        if (!confirm(`Replace ${PROJECT.customDefects.length} existing custom defects with ${data.defects.length} imported ones?`)) return;
+        PROJECT.customDefects = data.defects;
+      }
+      rebuildLibraries();
+      await saveProject(true);
+      renderDefectMgrList();
+      showToast(`✓ Imported ${data.defects.length} defects`, 'ok');
+    } catch (e) { showToast('Import error: ' + e.message, 'err'); }
+  };
+  reader.readAsText(file);
+  event.target.value = '';
+};
+
+/* ============================================================
+   INSPECTION TEMPLATE MANAGER UI
+   ============================================================ */
+window.openTemplateManager = function() {
+  const existing = document.getElementById('tmplMgrOverlay');
+  if (existing) existing.remove();
+  const overlay = document.createElement('div');
+  overlay.id = 'tmplMgrOverlay';
+  overlay.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,.7);z-index:9999;display:flex;align-items:center;justify-content:center;padding:20px';
+  overlay.innerHTML = `<div style="background:#fff;border-radius:8px;max-width:1100px;width:100%;max-height:90vh;overflow:auto;padding:20px;display:flex;flex-direction:column">
+    <div style="display:flex;justify-content:space-between;align-items:center;border-bottom:3px solid #F05A28;padding-bottom:10px;margin-bottom:14px;flex-wrap:wrap;gap:8px">
+      <h3 style="margin:0;color:#0D1B2A;font-family:'Barlow Condensed';text-transform:uppercase;letter-spacing:1px">🛠 Inspection Templates Manager</h3>
+      <button onclick="document.getElementById('tmplMgrOverlay').remove()" style="background:#dc2626;color:#fff;border:none;padding:8px 14px;border-radius:4px;cursor:pointer;font-weight:bold">✕ Close</button>
+    </div>
+    <div class="row" style="margin-bottom:10px;flex-wrap:wrap">
+      <button class="btn primary" onclick="openTemplateEditor()">➕ New custom template</button>
+      <button class="btn" onclick="exportCustomTemplates()">⬇ Export custom templates (JSON)</button>
+      <button class="btn" onclick="document.getElementById('importTmplFile').click()">⬆ Import templates (JSON)</button>
+      <input type="file" id="importTmplFile" accept=".json" style="display:none" onchange="importCustomTemplates(event)">
+    </div>
+    <div id="tmplMgrList" style="flex:1;overflow-y:auto"></div>
+  </div>`;
+  document.body.appendChild(overlay);
+  renderTemplateMgrList();
+};
+
+window.renderTemplateMgrList = function() {
+  let html = '';
+  INSPECTION_TYPES.forEach((insp, i) => {
+    const itemCount = (insp.items?.length || 0) + (insp.standards14?.length || 0) +
+      (insp.stages ? insp.stages.reduce((s, st) => s + st.chk.length, 0) : 0) +
+      (insp.types?.length || 0);
+    html += `<div style="margin-bottom:8px;border:1px solid #d2cec8;border-radius:6px;overflow:hidden">
+      <div style="background:${insp._custom ? '#fff8e1' : '#f6f8fa'};padding:10px;display:flex;justify-content:space-between;align-items:start;gap:10px;flex-wrap:wrap">
+        <div style="flex:1;min-width:200px">
+          <strong style="color:#0D1B2A">${esc(insp.name)}</strong>
+          ${insp._custom ? '<span style="background:#F05A28;color:#fff;padding:2px 8px;border-radius:10px;font-size:10px;margin-left:6px">CUSTOM</span>' : '<span style="background:#94a3b8;color:#fff;padding:2px 8px;border-radius:10px;font-size:10px;margin-left:6px">BUILT-IN</span>'}
+          <br>
+          <span class="mini muted">${esc(insp.cat || '')} · ${itemCount} items · ${esc(insp.standard || '')}</span>
+        </div>
+        <div style="display:flex;gap:4px">
+          ${insp._custom
+            ? `<button class="btn mini" onclick="editCustomTemplate('${insp.id}')">✏ Edit</button>
+               <button class="btn mini" style="background:#dc2626;color:#fff" onclick="deleteCustomTemplate('${insp.id}')">✕ Delete</button>`
+            : `<button class="btn mini" onclick="cloneTemplateToCustom('${insp.id}')">📋 Clone to customise</button>`}
+        </div>
+      </div>
+    </div>`;
+  });
+  document.getElementById('tmplMgrList').innerHTML = html;
+};
+
+window.openTemplateEditor = function(editId) {
+  const existing = document.getElementById('tmplEditOverlay');
+  if (existing) existing.remove();
+
+  const isEdit = !!editId;
+  const t = isEdit
+    ? PROJECT.customInspectionTypes.find(x => x.id === editId)
+    : { id: 'CUSTOM_' + Date.now().toString(36).toUpperCase(), cat: 'Custom', name: '', when: '', standard: '', scope: '', deliverable: '', items: [], typicalFee: '' };
+
+  if (!t) { alert('Template not found'); return; }
+
+  const overlay = document.createElement('div');
+  overlay.id = 'tmplEditOverlay';
+  overlay.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,.8);z-index:10000;display:flex;align-items:center;justify-content:center;padding:20px';
+  overlay.innerHTML = `<div style="background:#fff;border-radius:8px;max-width:780px;width:100%;max-height:90vh;overflow:auto;padding:20px">
+    <h3 style="margin:0 0 10px;color:#0D1B2A;font-family:'Barlow Condensed';text-transform:uppercase;letter-spacing:1px;border-bottom:3px solid #F05A28;padding-bottom:8px">${isEdit ? '✏ Edit' : '➕ New'} Inspection Template</h3>
+
+    <label style="display:block;margin-top:10px;font-weight:bold;font-size:12px;color:#0D1B2A">Template name *</label>
+    <input id="tmplName" value="${esc(t.name)}" placeholder="e.g. 5-Stage Custom Construction Inspection" style="width:100%;padding:8px;border:1px solid #d2cec8;border-radius:4px;margin-top:4px">
+
+    <label style="display:block;margin-top:10px;font-weight:bold;font-size:12px;color:#0D1B2A">Category</label>
+    <input id="tmplCat" value="${esc(t.cat)}" placeholder="e.g. Construction Stages / PCI / Specialised" style="width:100%;padding:8px;border:1px solid #d2cec8;border-radius:4px;margin-top:4px">
+
+    <label style="display:block;margin-top:10px;font-weight:bold;font-size:12px;color:#0D1B2A">When required</label>
+    <input id="tmplWhen" value="${esc(t.when)}" placeholder="e.g. At completion of frame stage before plaster" style="width:100%;padding:8px;border:1px solid #d2cec8;border-radius:4px;margin-top:4px">
+
+    <label style="display:block;margin-top:10px;font-weight:bold;font-size:12px;color:#0D1B2A">Standard / Reference</label>
+    <input id="tmplStandard" value="${esc(t.standard)}" placeholder="e.g. NCC 2022 + AS 1684 + AS 3660" style="width:100%;padding:8px;border:1px solid #d2cec8;border-radius:4px;margin-top:4px">
+
+    <label style="display:block;margin-top:10px;font-weight:bold;font-size:12px;color:#0D1B2A">Scope</label>
+    <textarea id="tmplScope" rows="3" placeholder="Brief description of what this inspection covers" style="width:100%;padding:8px;border:1px solid #d2cec8;border-radius:4px;margin-top:4px;resize:vertical">${esc(t.scope)}</textarea>
+
+    <label style="display:block;margin-top:10px;font-weight:bold;font-size:12px;color:#0D1B2A">Deliverable</label>
+    <input id="tmplDeliverable" value="${esc(t.deliverable)}" placeholder="e.g. Written report with photos and defect list" style="width:100%;padding:8px;border:1px solid #d2cec8;border-radius:4px;margin-top:4px">
+
+    <label style="display:block;margin-top:10px;font-weight:bold;font-size:12px;color:#0D1B2A">Typical fee (AUD)</label>
+    <input id="tmplFee" value="${esc(t.typicalFee)}" placeholder="e.g. $450–$850" style="width:100%;padding:8px;border:1px solid #d2cec8;border-radius:4px;margin-top:4px">
+
+    <label style="display:block;margin-top:10px;font-weight:bold;font-size:12px;color:#0D1B2A">Inspection items (one per line)</label>
+    <textarea id="tmplItems" rows="12" placeholder="Site safety — visual check&#10;Foundation — bolts torqued and labelled&#10;Frame — bracing complete to AS 1684 8.3" style="width:100%;padding:8px;border:1px solid #d2cec8;border-radius:4px;margin-top:4px;resize:vertical;font-family:monospace;font-size:12px">${esc((t.items || []).join('\n'))}</textarea>
+    <span class="mini muted">One inspection item per line. Each becomes a row with status, severity, cost, notes, and photo upload.</span>
+
+    <div class="row" style="margin-top:14px;justify-content:flex-end">
+      <button class="btn" onclick="document.getElementById('tmplEditOverlay').remove()">Cancel</button>
+      <button class="btn primary" onclick="saveTemplateFromEditor('${t.id}',${isEdit})">${isEdit ? '✓ Update' : '✓ Create template'}</button>
+    </div>
+  </div>`;
+  document.body.appendChild(overlay);
+  document.getElementById('tmplName').focus();
+};
+
+window.saveTemplateFromEditor = async function(id, isEdit) {
+  const name = document.getElementById('tmplName').value.trim();
+  if (!name) { alert('Template name is required'); return; }
+
+  const itemsRaw = document.getElementById('tmplItems').value;
+  const items = itemsRaw.split('\n').map(l => l.trim()).filter(l => l.length > 0);
+
+  const entry = {
+    id,
+    cat: document.getElementById('tmplCat').value.trim() || 'Custom',
+    name,
+    when: document.getElementById('tmplWhen').value.trim(),
+    standard: document.getElementById('tmplStandard').value.trim(),
+    scope: document.getElementById('tmplScope').value.trim(),
+    deliverable: document.getElementById('tmplDeliverable').value.trim(),
+    typicalFee: document.getElementById('tmplFee').value.trim(),
+    items
+  };
+
+  if (isEdit) {
+    const idx = PROJECT.customInspectionTypes.findIndex(x => x.id === id);
+    if (idx >= 0) PROJECT.customInspectionTypes[idx] = entry;
+  } else {
+    PROJECT.customInspectionTypes.push(entry);
+  }
+  rebuildLibraries();
+  await saveProject(true);
+  document.getElementById('tmplEditOverlay').remove();
+  renderTemplateMgrList();
+  renderPages();
+  showToast(`✓ Template ${isEdit ? 'updated' : 'created'} with ${items.length} items`, 'ok');
+};
+
+window.editCustomTemplate = function(id) { openTemplateEditor(id); };
+
+window.deleteCustomTemplate = async function(id) {
+  const t = PROJECT.customInspectionTypes.find(x => x.id === id);
+  if (!t) return;
+  if (!confirm(`Delete custom template "${t.name}"?\n\nThis will also remove any inspection data saved under this template.`)) return;
+  PROJECT.customInspectionTypes = PROJECT.customInspectionTypes.filter(x => x.id !== id);
+  /* Also clean up inspection data */
+  if (PROJECT.inspections && PROJECT.inspections[id]) delete PROJECT.inspections[id];
+  if (PROJECT.inspections && PROJECT.inspections.currentType === id) PROJECT.inspections.currentType = 'PrePurchaseBP';
+  rebuildLibraries();
+  await saveProject(true);
+  renderTemplateMgrList();
+  renderPages();
+  showToast('Template deleted', 'ok');
+};
+
+window.cloneTemplateToCustom = function(id) {
+  const src = INSPECTION_TYPES.find(i => i.id === id);
+  if (!src) return;
+  /* Flatten items from stages/standards14/etc into a single items array for editing simplicity */
+  let items = [...(src.items || [])];
+  if (src.stages) src.stages.forEach(s => s.chk.forEach(c => items.push(`[${s.n}] ${c}`)));
+  if (src.standards14) items = items.concat(src.standards14);
+  if (src.types) items = items.concat(src.types);
+
+  const newTmpl = {
+    id: 'CUSTOM_' + Date.now().toString(36).toUpperCase(),
+    cat: src.cat || 'Custom',
+    name: '[COPY] ' + src.name,
+    when: src.when || '',
+    standard: src.standard || '',
+    scope: src.scope || '',
+    deliverable: src.deliverable || '',
+    typicalFee: src.typicalFee || '',
+    items
+  };
+  PROJECT.customInspectionTypes.push(newTmpl);
+  rebuildLibraries();
+  saveProject(true);
+  openTemplateEditor(newTmpl.id);
+};
+
+window.exportCustomTemplates = function() {
+  if (!PROJECT.customInspectionTypes.length) {
+    showToast('No custom templates to export', 'warn');
+    return;
+  }
+  const data = {
+    version: 'V20-PWA',
+    type: 'HBC_Custom_Templates',
+    exportedAt: new Date().toISOString(),
+    count: PROJECT.customInspectionTypes.length,
+    templates: PROJECT.customInspectionTypes
+  };
+  const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = `HBC_Custom_Templates_${new Date().toISOString().slice(0,10)}.json`;
+  a.click();
+  showToast(`✓ Exported ${PROJECT.customInspectionTypes.length} templates`, 'ok');
+};
+
+window.importCustomTemplates = function(event) {
+  const file = event.target.files[0];
+  if (!file) return;
+  const reader = new FileReader();
+  reader.onload = async (e) => {
+    try {
+      const data = JSON.parse(e.target.result);
+      if (data.type !== 'HBC_Custom_Templates' || !Array.isArray(data.templates)) {
+        alert('Not a valid HBC templates export file');
+        return;
+      }
+      const mode = confirm(`Import ${data.templates.length} templates?\n\nOK = MERGE (keep existing)\nCancel = REPLACE all custom templates`);
+      /* Re-issue IDs to avoid collisions */
+      const imported = data.templates.map(t => ({ ...t, id: 'CUSTOM_' + Date.now().toString(36).toUpperCase() + Math.random().toString(36).slice(2,6).toUpperCase() }));
+      if (mode) {
+        PROJECT.customInspectionTypes = PROJECT.customInspectionTypes.concat(imported);
+      } else {
+        if (!confirm(`Replace ${PROJECT.customInspectionTypes.length} existing custom templates with ${imported.length} imported?`)) return;
+        PROJECT.customInspectionTypes = imported;
+      }
+      rebuildLibraries();
+      await saveProject(true);
+      renderTemplateMgrList();
+      renderPages();
+      showToast(`✓ Imported ${imported.length} templates`, 'ok');
+    } catch (e) { showToast('Import error: ' + e.message, 'err'); }
+  };
+  reader.readAsText(file);
+  event.target.value = '';
+};
+
+/* ============================================================
+   INJECT MANAGER BUTTONS INTO SETTINGS TAB + INSPECTIONS TAB
+   ============================================================ */
+const __origRenderSettings_libmgr = renderSettings;
+renderSettings = function() {
+  const base = __origRenderSettings_libmgr();
+  const customDef = (PROJECT.customDefects || []).length;
+  const customTmpl = (PROJECT.customInspectionTypes || []).length;
+  const totalDef = DEFECT_LIBRARY.reduce((s, c) => s + c.issues.length, 0);
+  const totalTmpl = INSPECTION_TYPES.length;
+  const mgrCard = card('🛠 Libraries & Templates', `
+    <p class="mini muted">Customise the defects library and inspection templates. All custom entries persist locally and sync via Google Drive. Built-in entries are read-only but you can clone them to customise.</p>
+    <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:10px;margin-top:10px">
+      <div style="border:1px solid #d2cec8;border-radius:6px;padding:12px;background:#f6f8fa">
+        <strong style="color:#0D1B2A;font-family:'Barlow Condensed';text-transform:uppercase;letter-spacing:1px">📋 Defects Library</strong>
+        <p class="mini" style="margin:6px 0">${totalDef} defects total · <strong style="color:#F05A28">${customDef} custom</strong></p>
+        <button class="btn primary" onclick="openDefectLibraryManager()" style="width:100%">Open Defects Library Manager</button>
+      </div>
+      <div style="border:1px solid #d2cec8;border-radius:6px;padding:12px;background:#f6f8fa">
+        <strong style="color:#0D1B2A;font-family:'Barlow Condensed';text-transform:uppercase;letter-spacing:1px">🏗 Inspection Templates</strong>
+        <p class="mini" style="margin:6px 0">${totalTmpl} templates total · <strong style="color:#F05A28">${customTmpl} custom</strong></p>
+        <button class="btn primary" onclick="openTemplateManager()" style="width:100%">Open Templates Manager</button>
+      </div>
+    </div>
+  `);
+  return base + '<div style="margin-top:14px">' + mgrCard + '</div>';
+};
+
+/* Add manager buttons to inspections tab toolbar */
+const __origRenderInsp_libmgr = renderInspections;
+renderInspections = function() {
+  const base = __origRenderInsp_libmgr();
+  /* Inject manager buttons into the GoAudits bar by string replacement */
+  const trigger = '⚡ GoAudits-Grade Inspection Toolkit</div>';
+  const buttons = `⚡ GoAudits-Grade Inspection Toolkit</div>
+    <div class="row" style="gap:4px;margin-top:6px">
+      <button class="btn mini" style="background:#fff;color:#0D1B2A" onclick="openDefectLibraryManager()">🛠 Defects Library Editor</button>
+      <button class="btn mini" style="background:#fff;color:#0D1B2A" onclick="openTemplateManager()">🛠 Templates Editor</button>
+    </div>`;
+  return base.replace(trigger, buttons);
+};
+
+/* Patch the openDefectPicker to expose "+ Add new" so user can add from within the picker */
+const __origOpenDefectPicker = window.openDefectPicker;
+window.openDefectPicker = function(insp, key) {
+  __origOpenDefectPicker(insp, key);
+  setTimeout(() => {
+    const overlay = document.getElementById('defectPickerOverlay');
+    if (!overlay) return;
+    const header = overlay.querySelector('h3');
+    if (!header || header.parentElement.querySelector('.add-def-btn')) return;
+    const addBtn = document.createElement('button');
+    addBtn.className = 'btn primary add-def-btn';
+    addBtn.style.cssText = 'padding:6px 12px;font-size:12px;margin-left:10px';
+    addBtn.innerHTML = '➕ Add to library';
+    addBtn.onclick = () => {
+      overlay.remove();
+      openDefectEditor();
+    };
+    header.parentElement.appendChild(addBtn);
+  }, 50);
+};
+
+/* Re-render once libraries are rebuilt */
+setTimeout(() => { rebuildLibraries(); renderPages(); }, 100);
 
 
 </script>
