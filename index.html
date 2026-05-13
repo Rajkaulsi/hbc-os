@@ -24328,15 +24328,38 @@ console.log("[Phase P] INSPECTION_LIBRARY loaded —", Object.keys(INSPECTION_LI
 window.LIBRARY_STATE = window.LIBRARY_STATE || {
   currentGroup: null,     /* INTERIOR / EXTERIOR / etc */
   currentLocation: null,  /* Master Bedroom / Roof Void / etc */
-  showComprehensive: false /* false = std only, true = std + comp */
+  depthMode: 'med'        /* 'short' (core only) | 'med' (core + key quality) | 'deep' (everything) */
+};
+/* Migration from old boolean flag */
+if (typeof LIBRARY_STATE.showComprehensive !== 'undefined') {
+  if (!LIBRARY_STATE.depthMode) LIBRARY_STATE.depthMode = LIBRARY_STATE.showComprehensive ? 'deep' : 'short';
+  delete LIBRARY_STATE.showComprehensive;
+}
+if (!LIBRARY_STATE.depthMode) LIBRARY_STATE.depthMode = 'med';
+
+/* Decide if an item is included at the current depth */
+window.itemPassesDepth = function(it, mode) {
+  mode = mode || LIBRARY_STATE.depthMode || 'med';
+  if (it.level === 'std') return true; /* std always shows */
+  /* it.level === 'comp' */
+  if (mode === 'deep') return true;
+  if (mode === 'short') return false;
+  /* medium: include comp items with severity >= 3 (key quality + safety) */
+  return (it.sev || 0) >= 3;
 };
 
-window.toggleComprehensive = function() {
-  LIBRARY_STATE.showComprehensive = !LIBRARY_STATE.showComprehensive;
+window.cycleDepthMode = function() {
+  const seq = ['short', 'med', 'deep'];
+  const idx = seq.indexOf(LIBRARY_STATE.depthMode);
+  LIBRARY_STATE.depthMode = seq[(idx + 1) % seq.length];
   if (typeof haptic === 'function') haptic([8, 20, 8]);
-  if (typeof showToast === 'function') showToast(LIBRARY_STATE.showComprehensive ? '✓ Comprehensive — showing ALL items' : '○ Standard — core items only', 'ok');
+  const labels = {short: '○ SHORT — core items only', med: '◐ MEDIUM — robust checklist', deep: '● DEEP — everything (industry-grade)'};
+  if (typeof showToast === 'function') showToast(labels[LIBRARY_STATE.depthMode], 'ok');
   if (typeof renderMobilePage === 'function') renderMobilePage();
 };
+
+/* Back-compat shim — old toggleComprehensive() still cycles */
+window.toggleComprehensive = function() { window.cycleDepthMode(); };
 
 /* =========================================================
    2. HAS-LIBRARY HELPER
@@ -24352,7 +24375,7 @@ window.renderMobileInspectionLibrary = function(typeId, jobInsp) {
   const lib = window.INSPECTION_LIBRARY[typeId];
   if (!lib) return null;
   
-  const showComp = LIBRARY_STATE.showComprehensive;
+  const mode = LIBRARY_STATE.depthMode || 'med';
   const currentGroup = LIBRARY_STATE.currentGroup;
   const currentLoc = LIBRARY_STATE.currentLocation;
   
@@ -24381,13 +24404,19 @@ window.renderMobileInspectionLibrary = function(typeId, jobInsp) {
   });
   html += '</div>';
   
-  /* Comprehensive toggle — prominent, sticky */
-  html += '<div style="padding:8px 8px 0;display:flex;align-items:center;gap:8px">';
-  html += '<button onclick="toggleComprehensive()" style="flex:1;background:' + (showComp ? '#F05A28' : '#fff') + ';color:' + (showComp ? '#fff' : '#0D1B2A') + ';border:2px solid #F05A28;border-radius:8px;padding:8px;font-size:12px;font-weight:700;cursor:pointer;display:flex;align-items:center;justify-content:center;gap:6px">';
-  html += '<span style="font-size:14px">' + (showComp ? '☑' : '☐') + '</span>';
-  html += '<span>' + (showComp ? 'COMPREHENSIVE' : 'STANDARD') + '</span>';
-  html += '</button>';
-  html += '<button onclick="mbOpenAIKeys()" style="background:#10B981;color:#fff;border:none;border-radius:8px;padding:8px 12px;font-size:12px;font-weight:700;cursor:pointer">🔑 AI</button>';
+  /* 3-segment depth control — compact, sits next to AI keys */
+  html += '<div style="padding:8px 8px 0;display:flex;align-items:center;gap:6px">';
+  html += '<div style="flex:1;display:flex;background:#f3f4f6;border-radius:8px;padding:2px;border:1.5px solid #e5e7eb">';
+  [
+    {k:'short', label:'Short', icon:'○'},
+    {k:'med',   label:'Medium', icon:'◐'},
+    {k:'deep',  label:'Deep',  icon:'●'}
+  ].forEach(seg => {
+    const on = mode === seg.k;
+    html += '<button onclick="window.setDepthMode(\'' + seg.k + '\')" style="flex:1;background:' + (on ? '#F05A28' : 'transparent') + ';color:' + (on ? '#fff' : '#0D1B2A') + ';border:none;border-radius:6px;padding:6px 4px;font-size:11px;font-weight:700;cursor:pointer">' + seg.icon + ' ' + seg.label + '</button>';
+  });
+  html += '</div>';
+  html += '<button onclick="mbOpenAIKeys()" style="background:#10B981;color:#fff;border:none;border-radius:8px;padding:7px 10px;font-size:11px;font-weight:700;cursor:pointer;flex-shrink:0">🔑 AI</button>';
   html += '</div>';
   html += '</div>';
   
@@ -24396,7 +24425,7 @@ window.renderMobileInspectionLibrary = function(typeId, jobInsp) {
     html += '<div style="padding:0 4px"><div style="font-size:11px;color:#64748b;font-weight:700;text-transform:uppercase;letter-spacing:.5px;margin:12px 0 8px">📂 Pick Area Group</div>';
     lib.groups.forEach(g => {
       const locCount = g.locations.length;
-      const itemCount = g.locations.reduce((s,l) => s + l.items.filter(it => showComp || it.level === 'std').length, 0);
+      const itemCount = g.locations.reduce((s,l) => s + l.items.filter(it => itemPassesDepth(it, mode)).length, 0);
       html += '<button onclick="mbPickGroup(\'' + g.name.replace(/'/g,"\\'") + '\')" style="display:flex;align-items:center;gap:12px;width:100%;background:#fff;border:1.5px solid #e5e7eb;border-radius:10px;padding:14px;margin-bottom:8px;cursor:pointer;text-align:left">';
       html += '<span style="font-size:24px;flex-shrink:0">' + groupIcon(g.name) + '</span>';
       html += '<div style="flex:1"><div style="font-size:14px;font-weight:700;color:#0D1B2A">' + esc(g.name) + '</div>';
@@ -24426,7 +24455,7 @@ window.renderMobileInspectionLibrary = function(typeId, jobInsp) {
     
     /* Build a combined list: library locations first, then customs for this group */
     const renderLocCard = (locDef, displayName, isCustom, customIdx) => {
-      const filteredItems = locDef.items.filter(it => showComp || it.level === 'std');
+      const filteredItems = locDef.items.filter(it => itemPassesDepth(it, mode));
       const itemCount = filteredItems.length;
       let completed = 0;
       filteredItems.forEach(it => {
@@ -24491,7 +24520,7 @@ window.renderMobileInspectionLibrary = function(typeId, jobInsp) {
     return renderMobileInspectionLibrary(typeId, jobInsp);
   }
   
-  const filteredItems = location.items.filter(it => showComp || it.level === 'std');
+  const filteredItems = location.items.filter(it => itemPassesDepth(it, mode));
   
   html += '<div style="padding:0 4px">';
   html += '<button onclick="mbBackToLocations()" style="display:flex;align-items:center;gap:6px;background:#f3f4f6;border:none;border-radius:6px;padding:8px 12px;margin:8px 0;font-size:12px;font-weight:700;color:#64748b;cursor:pointer">← ' + esc(currentGroup) + '</button>';
@@ -24501,7 +24530,7 @@ window.renderMobileInspectionLibrary = function(typeId, jobInsp) {
   html += '<div style="font-size:18px;font-weight:800;flex:1">' + esc(currentLoc) + '</div>';
   if (isCustomDup) html += '<span style="background:#fbbf24;color:#78350f;font-size:10px;padding:2px 8px;border-radius:8px;font-weight:800">DUPLICATE</span>';
   html += '</div>';
-  html += '<div style="font-size:11px;opacity:.7;margin-top:4px">' + filteredItems.length + ' items · ' + (showComp ? 'comprehensive' : 'standard') + '</div>';
+  html += '<div style="font-size:11px;opacity:.7;margin-top:4px">' + filteredItems.length + ' items · ' + (mode === 'short' ? 'short' : mode === 'med' ? 'medium' : 'deep') + '</div>';
   html += '</div>';
   
   if (!filteredItems.length) {
@@ -24854,8 +24883,8 @@ window.mbAIWriteLib = function(key) {
 window.HBC_PHASE_P_VERSION = '1.3';
 
 /* Default Comprehensive mode ON so deep checklist is visible immediately */
-if (LIBRARY_STATE && LIBRARY_STATE.showComprehensive === false) {
-  LIBRARY_STATE.showComprehensive = true;
+if (LIBRARY_STATE && !LIBRARY_STATE.depthMode) {
+  LIBRARY_STATE.depthMode = 'med';
 }
 
 /* AGGRESSIVE: Disable the old "Current location" pill entirely.
@@ -24902,39 +24931,175 @@ console.log('[Phase P v' + window.HBC_PHASE_P_VERSION + '] AGGRESSIVE override i
     return;
   }
   
-  /* Remove any previous injection */
-  document.querySelectorAll('#hbcPhasePBadge, #hbcPhasePToggle').forEach(el => el.remove());
+  /* CAPTURE CONSOLE LOG HISTORY before installing UI */
+  if (!window.HBC_CONSOLE_LOG) {
+    window.HBC_CONSOLE_LOG = [];
+    const origLog = console.log.bind(console);
+    const origWarn = console.warn.bind(console);
+    const origErr = console.error.bind(console);
+    function capture(level, args) {
+      try {
+        const line = Array.from(args).map(a => {
+          if (typeof a === 'string') return a;
+          try { return JSON.stringify(a).slice(0, 500); } catch(e) { return String(a); }
+        }).join(' ');
+        window.HBC_CONSOLE_LOG.push({ t: Date.now(), level: level, line: line });
+        if (window.HBC_CONSOLE_LOG.length > 500) window.HBC_CONSOLE_LOG.shift();
+      } catch(e) {}
+    }
+    console.log = function() { capture('log', arguments); origLog.apply(null, arguments); };
+    console.warn = function() { capture('warn', arguments); origWarn.apply(null, arguments); };
+    console.error = function() { capture('error', arguments); origErr.apply(null, arguments); };
+  }
   
-  /* GIANT VERSION BADGE — fixed top-right corner, on EVERY page */
+  /* Remove any previous injection */
+  document.querySelectorAll('#hbcPhasePBadge, #hbcPhasePToggle, #hbcDiagPanel').forEach(el => el.remove());
+  
+  /* TAPPABLE VERSION BADGE — fixed top-right corner. Tap to open diagnostics. */
   const badge = document.createElement('div');
   badge.id = 'hbcPhasePBadge';
-  badge.style.cssText = 'position:fixed;top:10px;right:10px;z-index:99999;background:#F05A28;color:#fff;padding:6px 12px;border-radius:20px;font-size:11px;font-weight:800;letter-spacing:.5px;box-shadow:0 4px 12px rgba(240,90,40,.5);font-family:sans-serif;pointer-events:none;border:2px solid #fff';
-  badge.textContent = '⚡ PHASE P v' + window.HBC_PHASE_P_VERSION;
+  badge.style.cssText = 'position:fixed;top:8px;right:8px;z-index:99999;background:#F05A28;color:#fff;padding:4px 10px;border-radius:12px;font-size:10px;font-weight:800;letter-spacing:.5px;box-shadow:0 2px 6px rgba(240,90,40,.4);font-family:sans-serif;border:1.5px solid #fff;cursor:pointer;opacity:.9';
+  badge.innerHTML = 'v' + window.HBC_PHASE_P_VERSION + ' ⓘ';
+  badge.onclick = function() { window.openDiagnostics(); };
   document.body.appendChild(badge);
   
-  /* GIANT DEEP CHECKLIST TOGGLE — fixed BOTTOM, full width, always visible */
+  /* DIAGNOSTICS PANEL — full-screen modal showing system state */
+  window.openDiagnostics = function() {
+    let panel = document.getElementById('hbcDiagPanel');
+    if (panel) { panel.remove(); return; }
+    
+    panel = document.createElement('div');
+    panel.id = 'hbcDiagPanel';
+    panel.style.cssText = 'position:fixed;inset:0;z-index:100000;background:rgba(13,27,42,.96);color:#fff;font-family:ui-monospace,Menlo,Consolas,monospace;font-size:11px;overflow:auto;padding:60px 12px 80px';
+    
+    let h = '';
+    h += '<div style="display:flex;align-items:center;gap:8px;padding:10px 12px;background:#0D1B2A;border-bottom:2px solid #F05A28;position:sticky;top:0;margin:-60px -12px 12px;z-index:1">';
+    h += '<span style="background:#F05A28;color:#fff;padding:3px 8px;border-radius:10px;font-weight:800;font-size:10px">v' + window.HBC_PHASE_P_VERSION + '</span>';
+    h += '<span style="flex:1;font-weight:700;font-size:13px;font-family:sans-serif">📊 SYSTEM DIAGNOSTICS</span>';
+    h += '<button onclick="document.getElementById(\'hbcDiagPanel\').remove()" style="background:#F05A28;color:#fff;border:none;border-radius:6px;padding:6px 12px;font-weight:800;cursor:pointer;font-family:sans-serif">CLOSE ✕</button>';
+    h += '</div>';
+    
+    /* System state */
+    h += '<div style="background:#1a2942;padding:10px 12px;border-radius:8px;margin-bottom:10px">';
+    h += '<div style="font-size:10px;color:#F05A28;font-weight:800;letter-spacing:1px;margin-bottom:8px">⚡ SYSTEM</div>';
+    h += '<div>Phase P Version: <b style="color:#10B981">v' + window.HBC_PHASE_P_VERSION + '</b></div>';
+    h += '<div>Libraries Loaded: <b style="color:#10B981">' + Object.keys(window.INSPECTION_LIBRARY || {}).length + '</b></div>';
+    h += '<div>Depth Mode: <b style="color:#F05A28">' + ((window.LIBRARY_STATE && window.LIBRARY_STATE.depthMode) || 'med').toUpperCase() + '</b></div>';
+    h += '<div>Active Inspection: <b style="color:#10B981">' + ((window.PROJECT && window.PROJECT.inspections && window.PROJECT.inspections.currentType) || 'none') + '</b></div>';
+    h += '<div>Current Group: <b>' + ((window.LIBRARY_STATE && window.LIBRARY_STATE.currentGroup) || '—') + '</b></div>';
+    h += '<div>Current Location: <b>' + ((window.LIBRARY_STATE && window.LIBRARY_STATE.currentLocation) || '—') + '</b></div>';
+    h += '<div>renderMobileInspect overridden: <b style="color:' + (window.renderMobileInspect ? '#10B981' : '#dc2626') + '">' + (window.renderMobileInspect ? 'YES' : 'NO') + '</b></div>';
+    h += '<div>mbRenderLocationSelector neutered: <b style="color:#10B981">' + (window.mbRenderLocationSelector && window.mbRenderLocationSelector() === '' ? 'YES' : 'NO') + '</b></div>';
+    h += '<div>Service Worker: <b>' + (navigator.serviceWorker && navigator.serviceWorker.controller ? 'controlling' : 'not-active') + '</b></div>';
+    h += '<div>Online: <b>' + (navigator.onLine ? 'yes' : 'no') + '</b></div>';
+    h += '<div>User Agent: <span style="font-size:9px;color:#94a3b8;word-break:break-all">' + navigator.userAgent + '</span></div>';
+    h += '</div>';
+    
+    /* Library counts per inspection type */
+    h += '<div style="background:#1a2942;padding:10px 12px;border-radius:8px;margin-bottom:10px">';
+    h += '<div style="font-size:10px;color:#F05A28;font-weight:800;letter-spacing:1px;margin-bottom:8px">📚 INSPECTION LIBRARIES (counts by depth)</div>';
+    h += '<div style="display:grid;grid-template-columns:1fr auto auto auto;gap:4px 10px;font-size:10px">';
+    h += '<b>Type</b><b style="text-align:right;color:#94a3b8">Short</b><b style="text-align:right;color:#fbbf24">Medium</b><b style="text-align:right;color:#F05A28">Deep</b>';
+    Object.keys(window.INSPECTION_LIBRARY || {}).forEach(id => {
+      const lib = window.INSPECTION_LIBRARY[id];
+      let std = 0, med = 0, deep = 0;
+      lib.groups.forEach(g => g.locations.forEach(l => l.items.forEach(it => {
+        if (it.level === 'std') { std++; med++; deep++; }
+        else { deep++; if (it.sev >= 3) med++; }
+      })));
+      const short = id.length > 18 ? id.slice(0, 16) + '…' : id;
+      h += '<span>' + short + '</span>';
+      h += '<span style="text-align:right">' + std + '</span>';
+      h += '<span style="text-align:right">' + med + '</span>';
+      h += '<span style="text-align:right">' + deep + '</span>';
+    });
+    h += '</div>';
+    h += '</div>';
+    
+    /* Recent console log */
+    h += '<div style="background:#1a2942;padding:10px 12px;border-radius:8px;margin-bottom:10px">';
+    h += '<div style="display:flex;align-items:center;gap:8px;margin-bottom:8px">';
+    h += '<span style="font-size:10px;color:#F05A28;font-weight:800;letter-spacing:1px;flex:1">📜 CONSOLE LOG (last 80)</span>';
+    h += '<button onclick="window.HBC_CONSOLE_LOG = []; document.getElementById(\'hbcDiagPanel\').remove(); window.openDiagnostics();" style="background:#475569;color:#fff;border:none;border-radius:6px;padding:4px 8px;font-size:10px;font-weight:700;cursor:pointer;font-family:sans-serif">Clear</button>';
+    h += '<button onclick="window.shareDiagnostics()" style="background:#10B981;color:#fff;border:none;border-radius:6px;padding:4px 8px;font-size:10px;font-weight:700;cursor:pointer;font-family:sans-serif">📋 Copy</button>';
+    h += '</div>';
+    const logs = (window.HBC_CONSOLE_LOG || []).slice(-80);
+    if (!logs.length) {
+      h += '<div style="color:#94a3b8;text-align:center;padding:10px">No console activity yet</div>';
+    } else {
+      logs.forEach(l => {
+        const c = l.level === 'error' ? '#fca5a5' : l.level === 'warn' ? '#fbbf24' : '#cbd5e1';
+        const ts = new Date(l.t).toTimeString().slice(0, 8);
+        h += '<div style="color:' + c + ';padding:2px 0;border-bottom:1px solid #2d3a55;word-break:break-word"><span style="color:#64748b">' + ts + '</span> ' + (l.line || '').replace(/[<>&]/g, c => ({'<':'&lt;','>':'&gt;','&':'&amp;'}[c])) + '</div>';
+      });
+    }
+    h += '</div>';
+    
+    /* Recent errors only — highlighted */
+    const errs = (window.HBC_CONSOLE_LOG || []).filter(l => l.level === 'error');
+    if (errs.length) {
+      h += '<div style="background:#7f1d1d;padding:10px 12px;border-radius:8px;margin-bottom:10px">';
+      h += '<div style="font-size:10px;color:#fef2f2;font-weight:800;letter-spacing:1px;margin-bottom:8px">⚠ ERRORS (' + errs.length + ')</div>';
+      errs.slice(-20).forEach(l => {
+        h += '<div style="color:#fca5a5;padding:3px 0">' + l.line.replace(/[<>&]/g, c => ({'<':'&lt;','>':'&gt;','&':'&amp;'}[c])) + '</div>';
+      });
+      h += '</div>';
+    }
+    
+    panel.innerHTML = h;
+    document.body.appendChild(panel);
+  };
+  
+  /* Copy diagnostics to clipboard */
+  window.shareDiagnostics = function() {
+    let text = '=== HBC OS Phase P Diagnostics ===\n';
+    text += 'Version: ' + window.HBC_PHASE_P_VERSION + '\n';
+    text += 'Libraries: ' + Object.keys(window.INSPECTION_LIBRARY || {}).length + '\n';
+    text += 'Depth Mode: ' + ((window.LIBRARY_STATE && window.LIBRARY_STATE.depthMode) || 'unknown') + '\n';
+    text += 'Active: ' + ((window.PROJECT && window.PROJECT.inspections && window.PROJECT.inspections.currentType) || 'none') + '\n';
+    text += 'UA: ' + navigator.userAgent + '\n';
+    text += '\n--- Last 40 console messages ---\n';
+    (window.HBC_CONSOLE_LOG || []).slice(-40).forEach(l => {
+      text += '[' + l.level + '] ' + l.line + '\n';
+    });
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      navigator.clipboard.writeText(text).then(() => {
+        if (typeof showToast === 'function') showToast('✓ Diagnostics copied to clipboard', 'ok');
+      }).catch(() => {
+        alert(text.slice(0, 5000));
+      });
+    } else {
+      alert(text.slice(0, 5000));
+    }
+  };
+  
+  /* COMPACT 3-SEGMENT DEPTH PILL — fixed bottom-right, small */
   const toggleBar = document.createElement('div');
   toggleBar.id = 'hbcPhasePToggle';
-  function paintToggle() {
-    const on = window.LIBRARY_STATE && window.LIBRARY_STATE.showComprehensive;
-    toggleBar.innerHTML = '<button onclick="window.toggleComprehensive && window.toggleComprehensive(); document.getElementById(\'hbcPhasePToggle\') && window._paintHBCToggle && window._paintHBCToggle();" style="width:100%;background:' + (on ? '#F05A28' : '#fff') + ';color:' + (on ? '#fff' : '#0D1B2A') + ';border:none;padding:14px;font-size:14px;font-weight:800;letter-spacing:.5px;cursor:pointer;display:flex;align-items:center;justify-content:center;gap:10px;font-family:sans-serif">' +
-      '<span style="font-size:20px">' + (on ? '☑' : '☐') + '</span>' +
-      '<span>' + (on ? 'DEEP CHECKLIST ON — Tap for short list' : 'TAP TO TURN ON DEEP CHECKLIST') + '</span>' +
-    '</button>';
-  }
-  window._paintHBCToggle = paintToggle;
-  toggleBar.style.cssText = 'position:fixed;bottom:0;left:0;right:0;z-index:99998;background:#fff;border-top:3px solid #F05A28;box-shadow:0 -4px 16px rgba(0,0,0,.15);font-family:sans-serif';
-  document.body.appendChild(toggleBar);
-  paintToggle();
   
-  /* Wrap toggleComprehensive to also repaint our fixed toggle */
-  const origToggle = window.toggleComprehensive;
-  window.toggleComprehensive = function() {
-    if (origToggle) origToggle();
+  /* Expose for handlers */
+  window.setDepthMode = function(mode) {
+    if (!window.LIBRARY_STATE) window.LIBRARY_STATE = {};
+    window.LIBRARY_STATE.depthMode = mode;
+    if (typeof haptic === 'function') haptic(8);
+    if (typeof renderMobilePage === 'function') renderMobilePage();
     paintToggle();
   };
   
-  console.log('[Phase P v' + window.HBC_PHASE_P_VERSION + '] Global UI injected: badge + bottom toggle bar');
+  function paintToggle() {
+    const mode = (window.LIBRARY_STATE && window.LIBRARY_STATE.depthMode) || 'med';
+    const seg = function(k, label, icon) {
+      const on = mode === k;
+      return '<button onclick="window.setDepthMode(\'' + k + '\')" style="background:' + (on ? '#F05A28' : 'transparent') + ';color:' + (on ? '#fff' : '#0D1B2A') + ';border:none;border-radius:14px;padding:6px 10px;font-size:11px;font-weight:700;cursor:pointer;font-family:sans-serif">' + icon + ' ' + label + '</button>';
+    };
+    toggleBar.innerHTML = seg('short','Short','○') + seg('med','Medium','◐') + seg('deep','Deep','●');
+  }
+  window._paintHBCToggle = paintToggle;
+  toggleBar.style.cssText = 'position:fixed;bottom:12px;right:12px;z-index:99998;background:#fff;border:1.5px solid #e5e7eb;border-radius:18px;padding:3px;box-shadow:0 4px 12px rgba(0,0,0,.12);display:flex;gap:2px;font-family:sans-serif';
+  document.body.appendChild(toggleBar);
+  paintToggle();
+  
+  console.log('[Phase P v' + window.HBC_PHASE_P_VERSION + '] Compact depth pill + diagnostics panel installed');
 })();
 
 /* =========================================================
@@ -25600,6 +25765,146 @@ console.log('[Phase P] Library stats:', Object.keys(window.INSPECTION_LIBRARY).m
   window.INSPECTION_LIBRARY['AESMR'].groups.forEach(g => {
     g.locations.forEach(l => n += add('AESMR', g.name, l.location, AESMR.slice(0, 8)));
   });
+
+  /* ===== STAGE FRAME — major bracing/timber expansion (AS 1684 deep) ===== */
+  const FRAME_BRACING_DEEP = [
+    ['Wind classification (N1/N2/N3/N4/C1/C2/C3/C4) verified', 5, 'AS 4055'],
+    ['Bracing demand calculation — kN per direction matches plans', 5, 'AS 1684'],
+    ['Bracing capacity provided ≥ demand per direction', 5, 'AS 1684'],
+    ['Bracing distribution — within 5m of wall ends', 5, 'AS 1684'],
+    ['Bracing distribution — no more than 9m between brace walls', 5, 'AS 1684'],
+    ['Sheet brace edge nailing 150mm centres', 4, 'AS 1684'],
+    ['Sheet brace field nailing 300mm centres', 3, 'AS 1684'],
+    ['Sheet brace nail size and grade (typically 30×2.5)', 4, 'AS 1684'],
+    ['Sheet brace fixings to TOP plate', 5, 'AS 1684'],
+    ['Sheet brace fixings to BOTTOM plate', 5, 'AS 1684'],
+    ['Sheet brace material thickness (4.5mm structural ply)', 4, 'AS 1684'],
+    ['Sheet brace board thickness (HardiBrace 7mm)', 4, 'AS 1684'],
+    ['Diagonal brace angle 30°-60° from horizontal', 3, 'AS 1684'],
+    ['Diagonal brace continuous bottom-to-top plate', 5, 'AS 1684'],
+    ['Diagonal brace fixings — type and count per AS 1684', 4, 'AS 1684'],
+    ['Cross brace (K-brace) tension and compression', 4, 'AS 1684'],
+    ['Metal strap brace tension correctly tightened', 4, 'AS 1684'],
+    ['Brace type compatible with frame system (timber/steel)', 4, 'AS 1684'],
+    ['Bracing in sub-floor walls (if present)', 4, 'AS 1684'],
+    ['Bracing in upper storey walls', 5, 'AS 1684'],
+    ['Bracing TRANSVERSE direction adequate', 5, 'AS 1684'],
+    ['Bracing LONGITUDINAL direction adequate', 5, 'AS 1684'],
+    ['Bracing wall length minimum 600mm', 4, 'AS 1684'],
+    ['Top plate continuous across brace wall', 4, 'AS 1684'],
+    ['Bottom plate fixings within brace wall', 5, 'AS 1684'],
+    ['Tie-down within brace wall continuous to footings', 5, 'AS 1684'],
+    ['Brace wall openings ≤ 25% of wall length', 4, 'AS 1684'],
+    ['Brace nominated on truss layout drawings', 4, 'AS 1684'],
+    ['Brace nominated on engineer drawings', 5, 'AS 1684'],
+    ['Site instruction for variation signed', 4, ''],
+    ['No services cutting through brace', 5, 'AS 1684'],
+    ['Brace identification (engineer markup) present', 3, ''],
+    ['Top plate splice within brace wall (splice plate)', 4, 'AS 1684'],
+    ['Corner bracing complete (boxed or strapped)', 5, 'AS 1684'],
+    ['Stud spacing within brace 450mm or 600mm verified', 4, 'AS 1684'],
+    ['No double studs splitting brace panel', 4, 'AS 1684'],
+    ['Single nailing pattern (no diagonal)', 3, 'AS 1684'],
+    ['Sheet edges supported by frame member', 4, 'AS 1684'],
+    ['Sheet H-jointers (if used) per AS 1684', 4, 'AS 1684'],
+    ['Bracing schedule on site at frame inspection', 5, 'AS 1684'],
+    ['As-installed brace photos and dimensions logged', 3, ''],
+    ['Lintel size adequate per AS 1684 Table tables', 5, 'AS 1684'],
+    ['Lintel span verified — measured at site', 4, 'AS 1684'],
+    ['Lintel bearing 75mm minimum on trimmers', 5, 'AS 1684'],
+    ['Lintel grade and species verified', 4, 'AS 1684'],
+    ['LVL lintel — manufacturer/grade visible', 4, 'AS 1684'],
+    ['Trimmer studs doubled at openings > 1200mm', 4, 'AS 1684'],
+    ['Header beam splice plates if applicable', 4, 'AS 1684'],
+    ['Sill trimmer for windows', 3, 'AS 1684'],
+    ['Studs above lintels — cripple studs at 600mm', 3, 'AS 1684'],
+    ['Studs below sills — cripples to bottom plate', 3, 'AS 1684'],
+    ['Window opening square ± 5mm', 2, 'AS 2047'],
+    ['Door opening square ± 3mm', 2, ''],
+    ['Wall plate end-bearings at corners', 4, 'AS 1684'],
+    ['Internal load-bearing walls identified on plans', 4, 'AS 1684'],
+    ['Internal load-bearing wall continuous bearing', 5, 'AS 1684'],
+    ['Stud size for height (90mm for 2.7m walls)', 4, 'AS 1684'],
+    ['Stud spacing varied for load (per engineer)', 4, 'AS 1684'],
+    ['Studs notched within AS 1684 allowance', 4, 'AS 1684'],
+    ['No holes drilled through structural members improperly', 4, 'AS 1684'],
+    ['Engineer signed-off variation letters on file', 5, ''],
+  ];
+  const FRAME_TIEDOWN_DEEP = [
+    ['Tie-down system — type (rod/strap/cyclone tie)', 5, 'AS 1684'],
+    ['Tie-down at every corner', 5, 'AS 1684'],
+    ['Tie-down at intermediate spacing per design', 5, 'AS 1684'],
+    ['Tie-down rod diameter (M10/M12) verified', 5, 'AS 1684'],
+    ['Tie-down rod continuous to footings (chemset/cast-in)', 5, 'AS 1684'],
+    ['Tie-down rod top connection (washer + nut)', 5, 'AS 1684'],
+    ['Tie-down rod tensioned per spec', 4, 'AS 1684'],
+    ['Cyclone ties on every truss-to-plate connection', 5, 'AS 1684'],
+    ['Cyclone ties on every roof beam connection', 5, 'AS 1684'],
+    ['Hold-down strap material zinc 600 g/m²', 4, 'AS 1684'],
+    ['Strap fixings min 6 nails each end', 4, 'AS 1684'],
+    ['Strap continuous over walls and lintels', 4, 'AS 1684'],
+    ['Bottom plate to slab — M10 anchor at 1.2m max', 5, 'AS 1684'],
+    ['Bottom plate to bearer — coach screw / bolt size', 5, 'AS 1684'],
+    ['Trussed roof tie-down per AS 4440', 5, 'AS 4440'],
+    ['Truss-to-girder truss connection clip', 5, 'AS 4440'],
+    ['Mass-timber dead load contribution noted', 3, ''],
+    ['Site-specific wind classification N1/N2/N3/N4', 5, 'AS 4055'],
+    ['Cyclone zone tie-down (C-zone) double connections', 5, 'AS 1684'],
+    ['Tie-down photo log every 4m of perimeter', 3, ''],
+  ];
+  const FRAME_TRUSS_DEEP = [
+    ['Truss manufacturer documentation on site', 4, 'AS 4440'],
+    ['Truss layout plan signed off', 5, 'AS 4440'],
+    ['Truss spacing 600mm or 900mm verified', 4, 'AS 4440'],
+    ['Truss bearing surface clean and full', 5, 'AS 4440'],
+    ['Truss heel cantilever within spec', 4, 'AS 4440'],
+    ['Girder truss correctly oriented', 5, 'AS 4440'],
+    ['Hip rafter or hip truss support', 5, 'AS 4440'],
+    ['Valley truss saddle support', 5, 'AS 4440'],
+    ['Truss webs straight, no bow > L/300', 4, 'AS 4440'],
+    ['Truss top chord deflection < L/300', 4, 'AS 4440'],
+    ['Truss bottom chord deflection < L/250', 4, 'AS 4440'],
+    ['Gang nail plates fully bedded both sides', 5, 'AS 4440'],
+    ['No teeth lifted on gang nail plates', 5, 'AS 4440'],
+    ['Truss bracing — speed brace at top chord', 5, 'AS 4440'],
+    ['Truss bracing — diagonal at every 4th truss', 5, 'AS 4440'],
+    ['Truss bracing — longitudinal at bottom chord', 5, 'AS 4440'],
+    ['Truss web bracing where required', 5, 'AS 4440'],
+    ['Truss tie-down nominal type (strap/rod)', 5, 'AS 4440'],
+    ['Multiple ply trusses — fully nailed/bolted together', 5, 'AS 4440'],
+    ['Drop ceiling truss support if applicable', 4, 'AS 4440'],
+    ['Truss bearing wall continuous to foundation', 5, 'AS 1684'],
+    ['No site modifications to trusses without engineer', 5, 'AS 4440'],
+    ['Truss fabricator engineer certificate', 5, 'AS 4440'],
+    ['Truss span and pitch match plans', 5, 'AS 4440'],
+    ['Truss erection sequence per AS 4440', 4, 'AS 4440'],
+  ];
+
+  /* Inject these into Stage Frame */
+  n += add('StageFrame','STRUCTURE','Bracing', FRAME_BRACING_DEEP);
+  n += add('StageFrame','STRUCTURE','Tie-Down', FRAME_TIEDOWN_DEEP);
+  n += add('StageFrame','ROOF FRAMING','Trusses', FRAME_TRUSS_DEEP);
+  
+  /* Generic frame additions to remaining locations */
+  const FRAME_EXTRA = [
+    ['Photo each elevation at frame stage', 3, ''],
+    ['Bracing photo dimensions and identifier', 4, 'AS 1684'],
+    ['Tie-down photo every connection point', 4, 'AS 1684'],
+    ['Stud spacing measured at sample points', 3, 'AS 1684'],
+    ['Top plate level random check', 3, ''],
+    ['Bottom plate full bearing — no overhang', 4, 'AS 1684'],
+    ['Damp proof course continuous under plate', 4, 'AS 1684'],
+    ['Termite shield under bottom plate', 4, 'AS 3660.1'],
+    ['Treated timber to ground-contact zones', 4, 'AS 1604'],
+    ['Engineer pre-frame inspection sign-off', 5, ''],
+    ['No services compromising structural members', 4, 'AS 1684'],
+    ['Frame moisture content < 18%', 3, ''],
+    ['Frame square diagonal measurements', 3, ''],
+  ];
+  ['Bottom Plate & Tie-Down','Studs & Wall Frames','Lintels & Openings','Top Plates'].forEach(loc => n += add('StageFrame','STRUCTURE', loc, FRAME_EXTRA));
+  ['Conventional Roof','Battens'].forEach(loc => n += add('StageFrame','ROOF FRAMING', loc, FRAME_EXTRA));
+  ['Joists & Bearers'].forEach(loc => n += add('StageFrame','FLOOR FRAMING (Upper levels)', loc, FRAME_EXTRA));
+  ['Inspection'].forEach(loc => n += add('StageFrame','COMPLIANCE & SIGN-OFF', loc, FRAME_EXTRA));
 
   console.log('[Phase P Comprehensive Expansion] Added ' + n + ' deep-checklist items across libraries.');
 })();
