@@ -15730,33 +15730,339 @@ window.mbCreateCombinedStage = function() {
 console.log('[Phase F] Job dashboard + expanded stages + waterproofing split + combining + general notes loaded');
 
 
-
 /* ============================================================
    PHASE G — COMPREHENSIVE EXPANSION (V26)
-   1. Suppress 'Templates populated' popup on mobile
-   2. Location sets relevant per inspection type
-   3. Pool & Spa Safety — comprehensive with year/standard/Council notice
-   4. Dilapidation — expanded
-   5. Main photo / General photos / Obstructions photos collections
-   6. Defect reorder (up/down arrows)
+   1. Suppress 'Templates populated' popup
+   2. Three new photo sections (Cover / Site / Obstructions)
+   3. Location relevance per inspection type
+   4. Pool comprehensive with year + Council notice
+   5. Dilapidation expansion
+   6. Pre-Purchase expansion
    ============================================================ */
 
-/* ---------- 1. SUPPRESS AUTO-TEMPLATES POPUP ON MOBILE ---------- */
+/* ---------- 1. SUPPRESS AUTO-TEMPLATES POPUP ---------- */
 (function suppressAutoTemplatesAlert() {
   if (typeof autoTemplates !== 'function') return;
   const orig = window.autoTemplates;
   window.autoTemplates = function() {
     const origAlert = window.alert;
-    /* On mobile, swallow alerts. On desktop, allow them. */
-    if (document.body.classList.contains('mobile-mode')) {
-      window.alert = function(){};
-    }
-    try { orig.apply(this, arguments); } catch(e) { console.warn(e); }
+    window.alert = function() {};
+    try { orig.apply(this, arguments); } catch(e) {}
     window.alert = origAlert;
   };
 })();
 
-/* ---------- 2. LOCATION SETS PER INSPECTION TYPE ---------- */
+/* ---------- 2. PHOTO SECTIONS — STORAGE MODEL ---------- */
+/* PROJECT.reportPhotos = {
+     cover: { data, caption, ts },           // single main/cover photo
+     site: [{ data, caption, ts }],          // array — general site photos
+     obstructions: [{ data, caption, reason, ts }]  // array — what couldn't be inspected
+   }
+*/
+function ensureReportPhotos() {
+  PROJECT.reportPhotos = PROJECT.reportPhotos || {};
+  if (!('cover' in PROJECT.reportPhotos)) PROJECT.reportPhotos.cover = null;
+  if (!Array.isArray(PROJECT.reportPhotos.site)) PROJECT.reportPhotos.site = [];
+  if (!Array.isArray(PROJECT.reportPhotos.obstructions)) PROJECT.reportPhotos.obstructions = [];
+}
+
+/* ---------- PHOTO UPLOAD HELPER ---------- */
+function processPhotoUpload(file, maxDim, callback) {
+  const reader = new FileReader();
+  reader.onload = function(ev) {
+    const img = new Image();
+    img.onload = function() {
+      try {
+        let w = img.width, h = img.height;
+        if (w > maxDim || h > maxDim) {
+          if (w > h) { h = h * maxDim / w; w = maxDim; }
+          else { w = w * maxDim / h; h = maxDim; }
+        }
+        const canvas = document.createElement('canvas');
+        canvas.width = Math.round(w);
+        canvas.height = Math.round(h);
+        canvas.getContext('2d').drawImage(img, 0, 0, w, h);
+        callback(canvas.toDataURL('image/jpeg', 0.82));
+      } catch (err) { showToast('Photo error: ' + err.message, 'err'); }
+    };
+    img.onerror = function() { showToast('Image read error', 'err'); };
+    img.src = ev.target.result;
+  };
+  reader.onerror = function() { showToast('Read error', 'err'); };
+  reader.readAsDataURL(file);
+}
+
+/* ---------- COVER PHOTO ---------- */
+window.mbUploadCoverPhoto = function(source) {
+  ensureReportPhotos();
+  const input = document.createElement('input');
+  input.type = 'file';
+  input.accept = 'image/*';
+  if (source === 'camera') input.capture = 'environment';
+  input.onchange = function(e) {
+    const f = e.target.files[0];
+    if (!f) return;
+    processPhotoUpload(f, 1600, function(dataURL) {
+      PROJECT.reportPhotos.cover = {
+        data: dataURL,
+        caption: 'Property cover photo',
+        ts: Date.now()
+      };
+      /* Also keep the property photo on dashboard in sync */
+      PROJECT.propertyPhoto = dataURL;
+      if (typeof saveProject === 'function') saveProject(true);
+      haptic([10, 30, 10]);
+      showToast('✓ Cover photo saved', 'ok');
+      if (typeof renderMobilePage === 'function') renderMobilePage();
+    });
+  };
+  input.click();
+};
+
+window.mbRemoveCoverPhoto = function() {
+  if (!confirm('Remove cover photo?')) return;
+  ensureReportPhotos();
+  PROJECT.reportPhotos.cover = null;
+  PROJECT.propertyPhoto = null;
+  if (typeof saveProject === 'function') saveProject(true);
+  haptic(8);
+  renderMobilePage();
+};
+
+/* ---------- GENERAL SITE PHOTOS ---------- */
+window.mbAddSitePhotos = function(source) {
+  ensureReportPhotos();
+  const input = document.createElement('input');
+  input.type = 'file';
+  input.accept = 'image/*';
+  if (source === 'camera') input.capture = 'environment';
+  input.multiple = true;
+  input.onchange = function(e) {
+    const files = Array.from(e.target.files || []);
+    if (!files.length) return;
+    let remaining = files.length;
+    files.forEach(function(f) {
+      processPhotoUpload(f, 1600, function(dataURL) {
+        PROJECT.reportPhotos.site.push({
+          data: dataURL,
+          caption: '',
+          ts: Date.now()
+        });
+        remaining--;
+        if (remaining === 0) {
+          if (typeof saveProject === 'function') saveProject(true);
+          haptic([10, 30, 10]);
+          showToast('✓ ' + files.length + ' site photo' + (files.length > 1 ? 's' : '') + ' added', 'ok');
+          renderMobilePage();
+        }
+      });
+    });
+  };
+  input.click();
+};
+
+window.mbRemoveSitePhoto = function(idx) {
+  if (!confirm('Remove this site photo?')) return;
+  ensureReportPhotos();
+  PROJECT.reportPhotos.site.splice(idx, 1);
+  if (typeof saveProject === 'function') saveProject(true);
+  haptic(8);
+  renderMobilePage();
+};
+
+window.mbEditSitePhotoCaption = function(idx) {
+  ensureReportPhotos();
+  const p = PROJECT.reportPhotos.site[idx];
+  if (!p) return;
+  const newCap = prompt('Caption for this site photo:', p.caption || '');
+  if (newCap !== null) {
+    p.caption = newCap;
+    if (typeof saveProject === 'function') saveProject(true);
+    renderMobilePage();
+  }
+};
+
+/* ---------- OBSTRUCTIONS & LIMITATIONS PHOTOS ---------- */
+window.mbAddObstructionPhotos = function(source) {
+  ensureReportPhotos();
+  const input = document.createElement('input');
+  input.type = 'file';
+  input.accept = 'image/*';
+  if (source === 'camera') input.capture = 'environment';
+  input.multiple = true;
+  input.onchange = function(e) {
+    const files = Array.from(e.target.files || []);
+    if (!files.length) return;
+    let remaining = files.length;
+    files.forEach(function(f) {
+      processPhotoUpload(f, 1600, function(dataURL) {
+        PROJECT.reportPhotos.obstructions.push({
+          data: dataURL,
+          caption: '',
+          reason: '',
+          ts: Date.now()
+        });
+        remaining--;
+        if (remaining === 0) {
+          if (typeof saveProject === 'function') saveProject(true);
+          haptic([10, 30, 10]);
+          showToast('✓ ' + files.length + ' obstruction photo' + (files.length > 1 ? 's' : '') + ' added', 'ok');
+          renderMobilePage();
+        }
+      });
+    });
+  };
+  input.click();
+};
+
+window.mbEditObstruction = function(idx) {
+  ensureReportPhotos();
+  const o = PROJECT.reportPhotos.obstructions[idx];
+  if (!o) return;
+  mbBottomSheet('Edit Obstruction',
+    '<p style="font-size:12px;color:#64748b;margin-bottom:10px">Describe what could not be inspected and why. This appears in the Limitations section of the report.</p>' +
+    '<div style="text-align:center;margin-bottom:10px"><img src="' + o.data + '" style="max-width:100%;max-height:200px;border-radius:8px"></div>' +
+    '<span class="mb-detail-label">Area / item that could not be inspected</span>' +
+    '<input id="obsCap" class="mb-detail-input" placeholder="e.g. Sub-floor under master bedroom" value="' + esc(o.caption || '') + '" style="font-size:16px">' +
+    '<span class="mb-detail-label">Reason inspection was limited</span>' +
+    '<textarea id="obsReason" class="mb-detail-input" rows="3" placeholder="e.g. Restricted access due to stored possessions / Locked at time of inspection / Insufficient clearance below 400mm" style="font-size:16px">' + esc(o.reason || '') + '</textarea>' +
+    '<div class="mb-detail-actions" style="margin-top:14px">' +
+      '<button class="mb-detail-btn" style="background:#fee2e2;color:#991b1b" onclick="mbRemoveObstruction(' + idx + ')">🗑 Remove</button>' +
+      '<button class="mb-detail-btn" onclick="mbCloseSheet()">Cancel</button>' +
+      '<button class="mb-detail-btn primary" onclick="mbSaveObstruction(' + idx + ')">✓ Save</button>' +
+    '</div>'
+  );
+};
+
+window.mbSaveObstruction = function(idx) {
+  ensureReportPhotos();
+  const o = PROJECT.reportPhotos.obstructions[idx];
+  if (!o) return;
+  o.caption = (document.getElementById('obsCap') || {}).value || '';
+  o.reason = (document.getElementById('obsReason') || {}).value || '';
+  if (typeof saveProject === 'function') saveProject(true);
+  mbCloseSheet();
+  haptic([10, 30, 10]);
+  showToast('✓ Obstruction saved', 'ok');
+  renderMobilePage();
+};
+
+window.mbRemoveObstruction = function(idx) {
+  if (!confirm('Remove this obstruction record?')) return;
+  ensureReportPhotos();
+  PROJECT.reportPhotos.obstructions.splice(idx, 1);
+  if (typeof saveProject === 'function') saveProject(true);
+  mbCloseSheet();
+  haptic(8);
+  renderMobilePage();
+};
+
+/* ---------- PHOTO MANAGEMENT SCREEN (accessible via Photos tab or dashboard) ---------- */
+window.renderReportPhotosSection = function() {
+  ensureReportPhotos();
+  const rp = PROJECT.reportPhotos;
+  
+  let html = '<h3 style="font-family:\'Barlow Condensed\',sans-serif;text-transform:uppercase;letter-spacing:1px;font-size:16px;color:#0D1B2A;margin:14px 0 10px;border-left:4px solid #F05A28;padding-left:10px">📷 Report Photos</h3>';
+  
+  /* COVER PHOTO */
+  html += '<div style="background:#fff;border-radius:12px;padding:14px;margin-bottom:10px;box-shadow:0 1px 3px rgba(0,0,0,.05)">' +
+    '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">' +
+      '<h4 style="margin:0;font-size:12px;text-transform:uppercase;letter-spacing:1px;color:#0D1B2A;font-weight:700">Cover Photo</h4>' +
+      '<span class="mini muted" style="font-size:10px;color:#64748b">Appears on report cover</span>' +
+    '</div>';
+  if (rp.cover) {
+    html += '<div style="background:#000;border-radius:8px;overflow:hidden;max-height:180px"><img src="' + rp.cover.data + '" style="width:100%;height:180px;object-fit:cover;display:block"></div>' +
+      '<div class="mb-detail-actions" style="margin-top:8px">' +
+        '<button class="mb-detail-btn" style="flex:1" onclick="mbUploadCoverPhoto(\'camera\')">📷 Replace</button>' +
+        '<button class="mb-detail-btn" style="background:#fee2e2;color:#991b1b" onclick="mbRemoveCoverPhoto()">🗑</button>' +
+      '</div>';
+  } else {
+    html += '<div onclick="mbUploadCoverPhoto(\'camera\')" style="background:#fff;border:2px dashed #d2cec8;border-radius:8px;min-height:120px;display:flex;flex-direction:column;align-items:center;justify-content:center;color:#94a3b8;cursor:pointer">' +
+      '<div style="font-size:36px">📷</div>' +
+      '<div style="font-size:12px;margin-top:4px;font-weight:600">Tap to add cover photo</div>' +
+    '</div>' +
+    '<div class="mb-detail-actions" style="margin-top:8px">' +
+      '<button class="mb-detail-btn" style="flex:1" onclick="mbUploadCoverPhoto(\'camera\')">📷 Camera</button>' +
+      '<button class="mb-detail-btn" style="flex:1" onclick="mbUploadCoverPhoto(\'gallery\')">🖼 Gallery</button>' +
+    '</div>';
+  }
+  html += '</div>';
+  
+  /* SITE PHOTOS */
+  html += '<div style="background:#fff;border-radius:12px;padding:14px;margin-bottom:10px;box-shadow:0 1px 3px rgba(0,0,0,.05)">' +
+    '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">' +
+      '<h4 style="margin:0;font-size:12px;text-transform:uppercase;letter-spacing:1px;color:#0D1B2A;font-weight:700">General Site Photos (' + rp.site.length + ')</h4>' +
+      '<span class="mini muted" style="font-size:10px;color:#64748b">Property in context</span>' +
+    '</div>' +
+    '<p class="mini muted" style="font-size:11px;color:#64748b;margin:0 0 8px">Overall property views, elevations, aspect shots, street view. Not tied to a specific defect.</p>';
+  
+  if (rp.site.length) {
+    html += '<div class="mb-photo-grid" style="display:grid;grid-template-columns:repeat(3,1fr);gap:6px">' +
+      rp.site.map(function(p, i) {
+        return '<div style="position:relative;border-radius:6px;overflow:hidden;background:#000;aspect-ratio:1" onclick="mbEditSitePhotoCaption(' + i + ')">' +
+          '<img src="' + p.data + '" style="width:100%;height:100%;object-fit:cover;display:block">' +
+          '<button onclick="event.stopPropagation();mbRemoveSitePhoto(' + i + ')" style="position:absolute;top:4px;right:4px;background:rgba(220,38,38,.9);color:#fff;border:none;border-radius:50%;width:24px;height:24px;font-size:14px;cursor:pointer">×</button>' +
+          (p.caption ? '<div style="position:absolute;bottom:0;left:0;right:0;background:rgba(0,0,0,.7);color:#fff;font-size:9px;padding:3px 5px;text-align:center;text-overflow:ellipsis;white-space:nowrap;overflow:hidden">' + esc(p.caption) + '</div>' : '') +
+        '</div>';
+      }).join('') +
+    '</div>';
+  }
+  
+  html += '<div class="mb-detail-actions" style="margin-top:8px">' +
+    '<button class="mb-detail-btn primary" style="flex:1" onclick="mbAddSitePhotos(\'camera\')">📷 Camera</button>' +
+    '<button class="mb-detail-btn" style="flex:1" onclick="mbAddSitePhotos(\'gallery\')">🖼 Gallery</button>' +
+  '</div>';
+  html += '</div>';
+  
+  /* OBSTRUCTIONS */
+  html += '<div style="background:#fff;border-radius:12px;padding:14px;margin-bottom:10px;box-shadow:0 1px 3px rgba(0,0,0,.05)">' +
+    '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">' +
+      '<h4 style="margin:0;font-size:12px;text-transform:uppercase;letter-spacing:1px;color:#0D1B2A;font-weight:700">⚠ Obstructions & Limitations (' + rp.obstructions.length + ')</h4>' +
+      '<span class="mini muted" style="font-size:10px;color:#dc2626;font-weight:700">Liability protection</span>' +
+    '</div>' +
+    '<p class="mini muted" style="font-size:11px;color:#64748b;margin:0 0 8px">Photos of what could NOT be inspected and why. Critical for AS 4349.1 — protects against post-inspection disputes.</p>';
+  
+  if (rp.obstructions.length) {
+    html += '<div style="display:flex;flex-direction:column;gap:6px">' +
+      rp.obstructions.map(function(o, i) {
+        return '<div onclick="mbEditObstruction(' + i + ')" style="display:flex;gap:8px;background:#fff7ed;border:1px solid #fdba74;border-radius:8px;padding:8px;cursor:pointer">' +
+          '<img src="' + o.data + '" style="width:60px;height:60px;object-fit:cover;border-radius:4px;flex-shrink:0">' +
+          '<div style="flex:1;min-width:0">' +
+            '<div style="font-size:12px;font-weight:600;color:#0D1B2A">' + (o.caption ? esc(o.caption) : '<span style="color:#94a3b8">Tap to add area & reason</span>') + '</div>' +
+            (o.reason ? '<div style="font-size:11px;color:#64748b;margin-top:2px;line-height:1.3">' + esc(o.reason.slice(0, 100)) + (o.reason.length > 100 ? '…' : '') + '</div>' : '') +
+          '</div>' +
+        '</div>';
+      }).join('') +
+    '</div>';
+  }
+  
+  html += '<div class="mb-detail-actions" style="margin-top:8px">' +
+    '<button class="mb-detail-btn primary" style="flex:1" onclick="mbAddObstructionPhotos(\'camera\')">📷 Camera</button>' +
+    '<button class="mb-detail-btn" style="flex:1" onclick="mbAddObstructionPhotos(\'gallery\')">🖼 Gallery</button>' +
+  '</div>';
+  html += '</div>';
+  
+  return html;
+};
+
+/* ---------- ADD PHOTO BUTTON TO DASHBOARD ---------- */
+(function injectPhotoSectionIntoDashboard() {
+  if (typeof renderJobDashboard !== 'function') return;
+  const orig = window.renderJobDashboard;
+  window.renderJobDashboard = function() {
+    let html = orig.apply(this, arguments);
+    /* Insert photo section before General Notes */
+    const photoBlock = renderReportPhotosSection();
+    if (html.indexOf('General Notes') > -1) {
+      html = html.replace(/<div style="margin-top:24px;background:#fff;border-radius:12px;padding:14px 16px;box-shadow:0 1px 3px rgba\(0,0,0,\.05\)">\s*<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">\s*<h3 style="margin:0;font-size:13px;text-transform:uppercase;letter-spacing:1px;color:#0D1B2A;font-weight:700">📋 General Notes/, photoBlock + '$&');
+    } else {
+      html += photoBlock;
+    }
+    return html;
+  };
+})();
+
+/* ---------- 3. LOCATION RELEVANCE PER INSPECTION TYPE ---------- */
 const LOCATIONS_BY_INSPECTION = {
   PrePurchaseBP: {
     'Interior': ['Entry / Hallway', 'Lounge / Living', 'Dining', 'Kitchen', 'Master Bedroom', 'Bedroom 2', 'Bedroom 3', 'Bedroom 4', 'Main Bathroom', 'Ensuite', 'Powder Room / WC', 'Laundry', 'Garage Internal', 'Study / Office', 'Rumpus / Family', 'Walk-in Wardrobe', 'Storage', 'Stairs / Landing'],
@@ -15766,473 +16072,510 @@ const LOCATIONS_BY_INSPECTION = {
   },
   StagePrePour: {
     'Site & Set-out': ['Building Footprint', 'Set-out Pegs', 'Site Benchmark', 'Boundaries', 'Adjoining Protection'],
-    'Excavation': ['North Trench', 'South Trench', 'East Trench', 'West Trench', 'Internal Beams', 'Pad Footings'],
-    'Slab Components': ['Vapour Barrier', 'Reinforcement — Bottom', 'Reinforcement — Top', 'Edge Beams', 'Waffle Pods', 'Bar Chairs', 'Starter Bars'],
-    'Penetrations': ['Plumbing Penetrations', 'Electrical Conduits', 'Comms / NBN', 'Gas Penetration', 'Drainage Pits'],
-    'Termite Protection': ['Part A Barrier', 'Reticulation Fill Points', 'Termite Collars'],
-    'Documentation': ['Engineer Certification', 'Permit & Plans', 'Concrete Supply Docket']
+    'Excavation & Footings': ['North Footing', 'South Footing', 'East Footing', 'West Footing', 'Internal Beams', 'Pad Footings', 'Stepped Footings'],
+    'Slab Components': ['Vapour Barrier', 'Reinforcement — Bottom Mesh', 'Reinforcement — Top Mesh', 'Edge Beams', 'Waffle Pods', 'Bar Chairs', 'Starter Bars', 'Trench Mesh'],
+    'Penetrations': ['Plumbing Penetrations', 'Electrical Conduits', 'Comms / NBN', 'Gas Penetration', 'Drainage Pits', 'Pit Locations'],
+    'Termite Protection': ['Part A Barrier', 'Reticulation Fill Points', 'Termite Collars', 'Edge Protection'],
+    'Documentation': ['Engineer Certification', 'Permit & Plans', 'Concrete Supply', 'Site Benchmark']
   },
   StageFrame: {
-    'Wall Frames': ['Front Wall', 'Rear Wall', 'Left Wall', 'Right Wall', 'Internal Walls — Ground', 'Internal Walls — Upper'],
-    'Plates & Studs': ['Bottom Plate Tie-down', 'Top Plate', 'Stud Spacing', 'Plumb Check'],
-    'Openings': ['Door Lintels', 'Window Lintels', 'Garage Door Opening', 'Sliding Door Opening'],
-    'Bracing': ['Bracing Wall — Front', 'Bracing Wall — Rear', 'Bracing Wall — Left', 'Bracing Wall — Right'],
-    'Tie-downs': ['Roof Tie-down', 'Top Plate Tie-down', 'Bottom Plate Tie-down', 'Cyclonic Fixings'],
-    'Roof / Ceiling Frame': ['Trusses', 'Ceiling Joists', 'Hip / Valley', 'Bottom Chord Bracing', 'Top Chord Restraint'],
-    'Floor Frame (Upper)': ['Floor Joists', 'Bearers', 'Strutting', 'Floor Cantilever']
+    'Wall Frames': ['Front Wall Frame', 'Rear Wall Frame', 'Left Wall Frame', 'Right Wall Frame', 'Internal — Ground Floor', 'Internal — Upper Floor', 'Garage Walls'],
+    'Bottom & Top Plates': ['Bottom Plate — Tie-down', 'Top Plate', 'Plate Joints', 'Wall Plumb Check'],
+    'Studs & Openings': ['Stud Spacing — Sample', 'Door Lintels', 'Window Lintels', 'Garage Door Opening', 'Sliding Door Opening', 'Cripple Studs'],
+    'Bracing': ['Bracing Wall — Front', 'Bracing Wall — Rear', 'Bracing Wall — Sides', 'Internal Bracing', 'Sheet Bracing — Nailing'],
+    'Tie-downs': ['Roof to Top Plate', 'Plate to Stud', 'Plate to Slab', 'Tie-down Chain'],
+    'Ceiling & Roof Frame': ['Trusses — Layout', 'Ceiling Joists', 'Roof Bracing', 'Top Chord Restraint', 'Hip / Valley Sets'],
+    'Upper Floor Frame (if applicable)': ['Floor Joists', 'Bearer', 'Joist Hangers', 'Mid-span Strutting']
   },
   StageLockup: {
-    'Envelope': ['Roof Cover', 'Sarking', 'Flashings', 'Gutters & Downpipes', 'Box Gutters'],
-    'Openings': ['Front Door', 'Rear Door', 'Sliding Door', 'Garage Door', 'Bedroom Windows', 'Living Windows', 'Wet Area Windows'],
-    'Insulation': ['Wall Insulation', 'Ceiling Insulation', 'Floor Insulation', 'Penetration Sealing'],
-    'Rough-in Services': ['Plumbing Rough-in', 'Electrical Rough-in', 'HVAC Ducting', 'Smoke Alarm Wiring', 'Data / NBN', 'Gas Line']
+    'Roof & Weather': ['Roof Covering', 'Ridge & Hips', 'Valleys & Gutters', 'Downpipes', 'Flashings — Chimney', 'Flashings — Walls', 'Sarking', 'Roof Penetrations'],
+    'Windows & Doors': ['Front Windows', 'Rear Windows', 'Side Windows', 'Sliding Doors', 'Entry Door', 'Garage Door', 'Window Flashings'],
+    'Insulation': ['Wall Insulation — Front', 'Wall Insulation — Rear', 'Wall Insulation — Sides', 'Ceiling Insulation', 'Floor Insulation', 'Downlight Clearance'],
+    'Plumbing Rough-in': ['Hot/Cold Water', 'Drainage Stacks', 'Vents', 'Penetrations', 'HWS Connection'],
+    'Electrical Rough-in': ['Wiring Runs', 'Switchboard Rough-in', 'Smoke Alarm Wiring', 'Data / TV', 'External Cabling'],
+    'HVAC Rough-in': ['Ducting', 'Exhaust Fan Locations', 'Range Hood Vent', 'A/C Pad/Bracket']
   },
   StageWaterproofing: {
-    'Wet Areas': ['Main Bathroom', 'Ensuite', 'Powder Room / WC', 'Laundry', 'Kitchen Splashback'],
-    'External Wet': ['Balcony / Deck', 'Planter Boxes', 'Retaining Wall'],
-    'Components': ['Floor Membrane', 'Wall Membrane', 'Hob / Set-down', 'Floor Waste', 'Penetrations', 'Bond Breakers'],
-    'Sign-off': ['Flood Test', 'Waterproofer Certificate', 'Pre-tiling Photos']
+    'Wet Areas': ['Main Bathroom', 'Ensuite', 'Powder Room / WC', 'Laundry'],
+    'External Wet Areas': ['Balcony / Deck', 'Rooftop Deck', 'Planter Boxes', 'Retaining Walls'],
+    'Specific Zones': ['Shower Floor', 'Shower Walls', 'Shower Hob', 'Bath Set-down', 'Floor Wastes', 'Penetrations', 'Wall/Floor Junctions'],
+    'Testing': ['Bathroom Flood Test', 'Ensuite Flood Test', 'Balcony Water Test', 'Documentation Review']
   },
   StageFixing: {
-    'Linings': ['Wall Plaster', 'Ceiling Plaster', 'Cornice', 'Wet Area Linings'],
-    'Joinery': ['Kitchen Cabinets', 'Vanity — Bathroom', 'Vanity — Ensuite', 'Walk-in Robe', 'Built-in Robes', 'Linen Press', 'Pantry'],
-    'Tiling': ['Bathroom Floor', 'Bathroom Walls', 'Ensuite Floor', 'Ensuite Walls', 'Laundry Floor', 'Kitchen Splashback'],
-    'Doors & Architraves': ['Internal Doors', 'Architraves', 'Skirtings', 'Door Hardware'],
-    '2nd-Fix Services': ['GPOs & Switches', 'Light Fittings', 'Exhaust Fans', 'Smoke Alarms', 'Tapware', 'Toilet Pans']
+    'Interior Rooms': ['Entry / Hallway', 'Lounge / Living', 'Dining', 'Kitchen', 'Master Bedroom', 'Bedroom 2', 'Bedroom 3', 'Bedroom 4', 'Study', 'Rumpus'],
+    'Wet Areas': ['Main Bathroom', 'Ensuite', 'Powder / WC', 'Laundry'],
+    'Joinery': ['Kitchen Cabinets', 'Vanities', 'Wardrobes', 'WIR Fit-out', 'Linen Press'],
+    'Tiling': ['Floor Tiling', 'Wall Tiling', 'Shower Tiling', 'Splashbacks', 'Movement Joints'],
+    'Stairs / Other': ['Stairs', 'Landings', 'Garage', 'Outdoor Areas']
   },
   StagePCI: {
-    'External Final': ['Front Elevation', 'Rear Elevation', 'Left Side', 'Right Side', 'Driveway', 'Landscaping'],
-    'Internal Rooms': ['Entry / Hallway', 'Lounge / Living', 'Dining', 'Kitchen', 'Master Bedroom', 'Bedroom 2', 'Bedroom 3', 'Bedroom 4', 'Study', 'Rumpus'],
-    'Wet Areas Final': ['Main Bathroom', 'Ensuite', 'Powder Room', 'Laundry'],
-    'Services Commissioning': ['Hot Water', 'HVAC', 'Smoke Alarms', 'Garage Door'],
-    'Documentation Handover': ['Occupancy Permit', 'Certificates', 'Warranties', 'Manuals']
+    'Interior — Living Spaces': ['Entry / Hallway', 'Lounge', 'Dining', 'Kitchen', 'Family Room', 'Study', 'Rumpus'],
+    'Interior — Bedrooms': ['Master Bedroom', 'Bedroom 2', 'Bedroom 3', 'Bedroom 4', 'WIR'],
+    'Interior — Wet Areas': ['Main Bathroom', 'Ensuite', 'Powder / WC', 'Laundry'],
+    'Interior — Other': ['Stairs / Landing', 'Garage Internal', 'Storage'],
+    'External': ['Front Elevation', 'Rear Elevation', 'Left Side', 'Right Side', 'Driveway / Path', 'Front Yard', 'Rear Yard'],
+    'Services Commissioning': ['Hot Water System', 'HVAC', 'Switchboard', 'Smoke Alarms', 'Exhaust Fans', 'Garage Door'],
+    'Documentation': ['Hand-over Pack', 'Certificates', 'Manuals']
   },
   PoolSafety: {
-    'Pool Barrier': ['North Side', 'South Side', 'East Side', 'West Side', 'Gate(s)', 'Pool House / Cabana Wall'],
-    'NCZ Zones': ['NCZ External', 'NCZ Internal', 'Climbable Vegetation', 'Climbable Furniture', 'Retaining Wall (high side)'],
-    'Windows & Doors': ['Window into Pool Zone — Living', 'Window into Pool Zone — Bedroom', 'Door into Pool Zone — Main', 'Sliding Door into Pool Zone'],
-    'Pool & Spa': ['Pool Shell', 'Pool Surrounds', 'Coping & Tile', 'Ladder / Steps', 'Spa Cover'],
-    'Equipment': ['Pump & Filter', 'Chlorinator', 'Pool Lights', 'Equipotential Bonding', 'CPR Sign Location'],
-    'Documentation': ['Form 23 Location', 'Council Register Status', 'Meter Box Notice']
+    'Pool Details': ['Pool Shell', 'Pool Surrounds', 'Pool Equipment Area'],
+    'Barrier — Each Side': ['Barrier — North', 'Barrier — South', 'Barrier — East', 'Barrier — West', 'Boundary Fence as Barrier'],
+    'Gates & Access': ['Gate 1', 'Gate 2', 'Gate 3', 'Pedestrian Gate'],
+    'House Interface': ['Door from House — Kitchen/Living', 'Door from House — Bedroom', 'Window — Bedroom', 'Window — Bathroom', 'Window — Other'],
+    'NCZ & Climbable Zones': ['NCZ External', 'NCZ Internal', 'Climbable Object Audit', 'Vegetation Check', 'Retaining Wall Adjacent'],
+    'Electrical & Safety': ['Pool Pump', 'Pool Lighting', 'CPR Sign Location', 'Bonding & Earthing'],
+    'Spa (if present)': ['Spa Cover', 'Spa Surround', 'Spa Drain'],
+    'Documentation': ['Council Notice', 'Form 23 Status', 'Pool Register', 'Certificate Location']
   },
   Dilapidation: {
-    'External Elevations': ['Front', 'Rear', 'Left Side', 'Right Side'],
-    'Boundary': ['Front Fence', 'Side Fence Left', 'Side Fence Right', 'Rear Fence', 'Retaining Walls'],
-    'External Hardstand': ['Driveway', 'Front Path', 'Rear Yard Paving', 'Pool Surrounds', 'Crossover'],
-    'Interior': ['Entry', 'Lounge', 'Dining', 'Kitchen', 'Master Bedroom', 'Bedroom 2', 'Bedroom 3', 'Main Bathroom', 'Ensuite', 'Laundry', 'Garage'],
-    'Sub-floor / Roof Void': ['Sub-floor', 'Roof Void'],
-    'Adjoining Property': ['Adjoining North', 'Adjoining South', 'Adjoining East', 'Adjoining West']
+    'Site Context': ['Front Boundary', 'Rear Boundary', 'Left Boundary', 'Right Boundary', 'Adjoining Construction Site'],
+    'External Elevations': ['Front Elevation', 'Rear Elevation', 'Left Side', 'Right Side'],
+    'External Flatwork': ['Driveway', 'Paths — Front', 'Paths — Rear', 'Patio / Deck', 'Pool Surrounds'],
+    'Retaining & Fences': ['Retaining Wall — Front', 'Retaining Wall — Rear', 'Fence — Front', 'Fence — Sides', 'Fence — Rear'],
+    'Interior — Each Room': ['Entry', 'Lounge', 'Dining', 'Kitchen', 'Master Bedroom', 'Bedroom 2', 'Bedroom 3', 'Bedroom 4', 'Bathroom', 'Ensuite', 'Powder Room', 'Laundry', 'Hallway', 'Stairs'],
+    'Sub-floor & Roof Void': ['Sub-floor', 'Roof Void', 'Visible Framing'],
+    'Trees & Vegetation': ['Trees Within 1.5m', 'Trees on Boundary', 'Garden Beds Against Walls']
   },
   RentalStandards: {
-    'Habitable Rooms': ['Living', 'Bedroom 1', 'Bedroom 2', 'Bedroom 3', 'Kitchen'],
-    'Wet Areas': ['Bathroom', 'Ensuite', 'WC', 'Laundry'],
-    'Services': ['Switchboard', 'Hot Water', 'Heating', 'Smoke Alarms', 'Gas'],
-    'Exterior': ['Entry', 'Front Yard', 'Rear Yard', 'Locks & Security']
+    'Habitable Rooms': ['Lounge / Living', 'Dining', 'Master Bedroom', 'Bedroom 2', 'Bedroom 3', 'Bedroom 4', 'Study'],
+    'Wet Areas': ['Main Bathroom', 'Ensuite', 'Toilet', 'Laundry'],
+    'Cooking': ['Kitchen Cooktop', 'Kitchen Sink'],
+    'Services': ['Electrical Switchboard', 'Hot Water System', 'Heater Location', 'Gas Appliances', 'Smoke Alarms'],
+    'External': ['Front Entry', 'Bins Storage', 'Boundary'],
+    'Documentation': ['Electrical Cert', 'Gas Cert', 'Smoke Alarm Cert']
   }
 };
 
-/* Override ensureLocations to use type-specific locations */
-window.ensureLocations = function() {
-  if (!PROJECT.locations) PROJECT.locations = {};
-  const cur = PROJECT.inspections && PROJECT.inspections.currentType;
-  /* If type is recognized in our map, use it. For Combined stages, merge. */
-  let groups = LOCATIONS_BY_INSPECTION[cur];
-  if (!groups && cur && cur.startsWith('CombinedStage_')) {
-    const combined = INSPECTION_TYPES.find(t => t.id === cur);
-    if (combined && combined._combinedFrom) {
-      groups = {};
-      combined._combinedFrom.forEach(stageId => {
-        const stageLoc = LOCATIONS_BY_INSPECTION[stageId];
-        if (stageLoc) {
-          Object.keys(stageLoc).forEach(g => {
-            const key = stageLoc[g].length > 0 ? g + ' (' + stageId.replace('Stage', '') + ')' : g;
-            groups[key] = stageLoc[g];
-          });
-        }
-      });
+/* Apply location overrides when inspection type changes */
+window.applyLocationsForInspectionType = function(typeId) {
+  if (!PROJECT) return;
+  ensureLocations();
+  const locs = LOCATIONS_BY_INSPECTION[typeId];
+  if (locs) {
+    /* Only replace if user hasn't customised */
+    PROJECT.locations.groups = JSON.parse(JSON.stringify(locs));
+    /* Reset active to first available */
+    const firstGroup = Object.keys(locs)[0];
+    if (firstGroup && locs[firstGroup].length) {
+      PROJECT.locations.active = locs[firstGroup][0];
     }
   }
-  if (!groups) groups = LOCATIONS_BY_INSPECTION.PrePurchaseBP; /* fallback */
-  
-  /* Only reset if inspection type has changed since last setup */
-  if (PROJECT.locations._typeContext !== cur) {
-    PROJECT.locations.groups = JSON.parse(JSON.stringify(groups));
-    PROJECT.locations._typeContext = cur;
-    /* Pick a sensible default active location */
-    const firstGroup = Object.keys(groups)[0];
-    const firstLoc = firstGroup ? groups[firstGroup][0] : null;
-    if (firstLoc) PROJECT.locations.active = firstLoc;
-  }
-  if (!PROJECT.locations.active) {
-    const firstGroup = Object.keys(PROJECT.locations.groups || {})[0];
-    PROJECT.locations.active = firstGroup ? PROJECT.locations.groups[firstGroup][0] : 'General';
-  }
-  if (!PROJECT.locations.custom) PROJECT.locations.custom = [];
-  if (!PROJECT.freeFormObservations) PROJECT.freeFormObservations = [];
 };
 
-/* When user switches inspection type, refresh locations */
-(function rerouteSelectInspection() {
-  const orig = window.mbSelectInspection;
-  if (typeof orig === 'function') {
-    window.mbSelectInspection = function(id) {
-      if (PROJECT.locations) PROJECT.locations._typeContext = null; /* force refresh */
-      const r = orig.apply(this, arguments);
-      ensureLocations();
-      return r;
+/* Hook into inspection type changes */
+(function hookLocationsToType() {
+  const origCreate = window.mbCreateJob;
+  if (typeof origCreate === 'function') {
+    window.mbCreateJob = async function() {
+      const result = await origCreate.apply(this, arguments);
+      if (PROJECT.inspections && PROJECT.inspections.currentType) {
+        applyLocationsForInspectionType(PROJECT.inspections.currentType);
+        if (typeof saveProject === 'function') saveProject(true);
+      }
+      return result;
+    };
+  }
+  
+  /* Also on legacy job load — if locations are still building-only but it's a stage inspection */
+  const origLoad = window.loadJobIntoProject;
+  if (typeof origLoad === 'function') {
+    window.loadJobIntoProject = async function(jobId) {
+      const ok = await origLoad.apply(this, arguments);
+      if (ok && PROJECT.inspections && PROJECT.inspections.currentType) {
+        const cur = PROJECT.inspections.currentType;
+        /* Detect mismatch: if loaded locations don't match the inspection type, replace */
+        const expected = LOCATIONS_BY_INSPECTION[cur];
+        if (expected && PROJECT.locations && PROJECT.locations.groups) {
+          /* If first group of expected isn't present, apply */
+          const expectedFirstGroup = Object.keys(expected)[0];
+          if (!PROJECT.locations.groups[expectedFirstGroup]) {
+            applyLocationsForInspectionType(cur);
+          }
+        }
+      }
+      return ok;
     };
   }
 })();
 
-/* ---------- 3. POOL SAFETY — COMPREHENSIVE ---------- */
-const PHASE_G_POOL_COMPREHENSIVE = {
-  PoolSafety: {
-    name: 'Swimming Pool & Spa Safety Inspection (Form 23)',
-    standard: 'Determined by pool year — AS 1926.1-2012 (current). Vic Building Regs 2018 r144 / Building Act 1993 s223A / Pool Safety Officer Reg 2019',
-    scope: 'Comprehensive audit of swimming pool / spa safety barrier per the applicable standard for the year of pool installation, Victorian Building Regulations 2018 r144, and Council registration requirements. Identifies compliance for Form 23 certification.',
-    sections: [
-      { name: 'POOL DETAILS — Year & Type', items: [
-        ['Pool installation year recorded', 'std'],
-        ['Pool type identified — in-ground / above-ground / spa / portable / inflatable', 'std'],
-        ['Pool depth recorded — shallow & deep ends', 'std'],
-        ['Pool volume estimated (L or kL)', 'comp'],
-        ['Pool shell material — concrete / fibreglass / vinyl / steel', 'std'],
-        ['Most recent renovation / refit year', 'std'],
-        ['Renovation / refit triggers — barrier upgrade required if applicable', 'std']
-      ]},
-      { name: 'APPLICABLE STANDARD — Year Trigger', items: [
-        ['Pre-1991: Pre-AS 1926 — register, Form 23 still required', 'std'],
-        ['1991–April 2010: AS 1926-1986 / 1993 applies', 'std'],
-        ['May 2010–April 2019: AS 1926.1-2007 applies', 'std'],
-        ['May 2019 onward: AS 1926.1-2012 applies', 'std'],
-        ['Renovation post-May 2010 — current AS 1926.1 applies regardless of original year', 'std'],
-        ['Building Permit issued for pool barrier on record', 'std'],
-        ['Certificate of Final Inspection / Occupancy Permit', 'comp']
-      ]},
-      { name: 'COUNCIL NOTICE & REGISTRATION', items: [
-        ['Pool registered with Council on Swimming Pool & Spa Register', 'std'],
-        ['Council registration number recorded', 'std'],
-        ['Initial registration date recorded', 'std'],
-        ['Form 23 lodged with Council (within 30 days of inspection)', 'std'],
-        ['Last Form 23 lodgement date', 'std'],
-        ['4-yearly inspection cycle compliance verified', 'std'],
-        ['Next due Form 23 date calculated', 'std'],
-        ['Owner has received compliance notice from Council', 'comp'],
-        ['Council notice response timeframe met', 'comp'],
-        ['Penalties / non-compliance status with Council clarified', 'comp'],
-        ['Inspector registered as Pool Safety Officer', 'std'],
-        ['Inspector VBA / Council registration current', 'std'],
-        ['Form 23 template — current version 2019 used', 'std']
-      ]},
-      { name: 'BARRIER — NORTH SIDE', items: [
-        ['Effective barrier height ≥ 1200mm (or 1800mm if boundary)', 'std'],
-        ['Barrier height measured at multiple points along side', 'std'],
-        ['Gap below barrier ≤ 100mm', 'std'],
-        ['Vertical members ≤ 100mm apart', 'std'],
-        ['No openings > 100mm in barrier face', 'std'],
-        ['Mesh apertures ≤ 13mm (if mesh used)', 'std'],
-        ['Barrier integrity — no damage, no rust through, no loose panels', 'std'],
-        ['Barrier posts plumb and secure in ground', 'comp'],
-        ['Materials suitable — not climbable design', 'std']
-      ]},
-      { name: 'BARRIER — SOUTH SIDE', items: [
-        ['Effective barrier height ≥ 1200mm', 'std'],
-        ['Gap below barrier ≤ 100mm', 'std'],
-        ['Vertical members ≤ 100mm apart', 'std'],
-        ['Barrier integrity assessed', 'std']
-      ]},
-      { name: 'BARRIER — EAST SIDE', items: [
-        ['Effective barrier height ≥ 1200mm', 'std'],
-        ['Gap below barrier ≤ 100mm', 'std'],
-        ['Vertical members ≤ 100mm apart', 'std'],
-        ['Barrier integrity assessed', 'std']
-      ]},
-      { name: 'BARRIER — WEST SIDE', items: [
-        ['Effective barrier height ≥ 1200mm', 'std'],
-        ['Gap below barrier ≤ 100mm', 'std'],
-        ['Vertical members ≤ 100mm apart', 'std'],
-        ['Barrier integrity assessed', 'std']
-      ]},
-      { name: 'NON-CLIMBABLE ZONE (NCZ) — EXTERNAL', items: [
-        ['NCZ 900mm arc external — clear of climbable objects', 'std'],
-        ['No climbable horizontal members within 1100mm below top', 'std'],
-        ['Projections > 10mm not closer than 900mm', 'std'],
-        ['Door / gate hinge cover beyond 100mm spec', 'std'],
-        ['Trees within NCZ identified and trimmed / removed', 'std'],
-        ['Shrubs / vegetation within NCZ removed', 'std'],
-        ['Pot plants / planter boxes not in NCZ', 'std'],
-        ['Outdoor furniture / BBQs not in NCZ', 'std'],
-        ['Pool equipment housings not climbable in NCZ', 'std'],
-        ['Climbable retaining walls (high side) — barrier ≥ 2400mm from top of wall', 'std']
-      ]},
-      { name: 'NON-CLIMBABLE ZONE (NCZ) — INTERNAL', items: [
-        ['Internal NCZ 300mm from top — clear', 'std'],
-        ['No horizontal members provide foothold on inside face', 'std'],
-        ['Pool equipment / pumps not within NCZ internal', 'std']
-      ]},
-      { name: 'GATES — Each Gate Inspected', items: [
-        ['Gate count — 1, 2, 3+ gates recorded', 'std'],
-        ['Each gate ID-tagged for inspection', 'std'],
-        ['Gate self-closes from any open position (15° / 90° / max swing)', 'std'],
-        ['Gate self-closes when held 1 second then released', 'std'],
-        ['Gate self-latches reliably every attempt', 'std'],
-        ['Gate latch ≥ 1500mm above ground (release inside)', 'std'],
-        ['Gate latch shielded from outside access', 'std'],
-        ['Gate opens AWAY from pool', 'std'],
-        ['Gate hinges in good condition, no rust', 'std'],
-        ['Gate hinges adjusted to assist self-closing', 'comp'],
-        ['Gap between gate edge and latch post ≤ 100mm', 'std'],
-        ['Gap between gate edge and hinge post ≤ 100mm', 'std'],
-        ['Gap below gate ≤ 100mm', 'std'],
-        ['No padlock / chain disabling self-latching mechanism', 'std'],
-        ['Magnetic latch / mechanism functioning per manufacturer spec', 'comp'],
-        ['Gate signage if temporary lock (during pool resurfacing etc.)', 'comp']
-      ]},
-      { name: 'WINDOWS INTO POOL ZONE', items: [
-        ['Windows opening into pool zone identified', 'std'],
-        ['Sill height ≥ 1200mm above adjacent ground (no restrictor needed)', 'std'],
-        ['Sill height < 1200mm — child-resistant restrictor fitted', 'std'],
-        ['Restrictor opening ≤ 100mm', 'std'],
-        ['Restrictor secured and operational', 'std'],
-        ['Restrictor cannot be released by child', 'std'],
-        ['Fixed glazing — no opening', 'comp'],
-        ['Glass safety glazing per AS 1288 where required', 'comp']
-      ]},
-      { name: 'DOORS INTO POOL ZONE', items: [
-        ['Doors opening into pool zone identified', 'std'],
-        ['Each door self-closing and self-latching from inside', 'std'],
-        ['Latch ≥ 1500mm above floor', 'std'],
-        ['Door not propped open at time of inspection', 'std'],
-        ['Fly screens / security doors not relied on for compliance', 'std'],
-        ['Pet flap not within 100mm of latch', 'std'],
-        ['Sliding doors — locking mechanism operational', 'std']
-      ]},
-      { name: 'POOL SHELL & SURROUNDS', items: [
-        ['Pool shell cracking / leakage / structural damage', 'std'],
-        ['Pool tile lippage or loose tiles', 'std'],
-        ['Pool coping secure and level', 'std'],
-        ['Pool surrounds slip-resistant (R10+ recommended)', 'std'],
-        ['Pool depth markings visible at edges', 'std'],
-        ['Step-out (no-dive) markings if applicable', 'comp'],
-        ['Ladder / steps secure, no protruding bolts', 'std'],
-        ['Ladder rungs not climbable from outside', 'std']
-      ]},
-      { name: 'CPR & SAFETY SIGNAGE', items: [
-        ['CPR sign present', 'std'],
-        ['CPR sign current (within 5 years of latest guidelines)', 'std'],
-        ['CPR sign at minimum 300×400mm size', 'std'],
-        ['CPR sign mounted within 3m of pool, in clear sight', 'std'],
-        ['CPR sign readable from pool edge (font size legible)', 'std'],
-        ['CPR sign weather-resistant material', 'comp'],
-        ['Emergency phone number signage', 'comp'],
-        ['Pool ID / address on CPR sign (some councils require)', 'comp']
-      ]},
-      { name: 'POOL ELECTRICAL & EQUIPOTENTIAL BONDING', items: [
-        ['Pool pump RCD protected', 'std'],
-        ['Equipotential bonding installed (AS/NZS 3000:2018 §5.7.4)', 'std'],
-        ['Bonding to all metal pool fittings', 'std'],
-        ['Electrical fittings in pool zone — IP rated min IPX5', 'std'],
-        ['Pool lighting — Extra Low Voltage (ELV) where required', 'std'],
-        ['Cable management — no exposed cables in NCZ', 'std'],
-        ['Electrical Certificate of Safety on file', 'std']
-      ]},
-      { name: 'POOL EQUIPMENT & PUMP', items: [
-        ['Pump location outside NCZ of barrier', 'std'],
-        ['Pump shrouded / housed appropriately', 'comp'],
-        ['Filter clean and operational', 'comp'],
-        ['Chlorinator / sanitiser operational', 'comp'],
-        ['Heating system safe (gas / heat pump / solar)', 'comp']
-      ]},
-      { name: 'SPA-SPECIFIC ITEMS', items: [
-        ['Spa cover present and functional', 'std'],
-        ['Spa cover child-resistant lock (when not in use)', 'std'],
-        ['Spa drain entrapment compliance — anti-vortex covers', 'std'],
-        ['Spa emergency shut-off accessible', 'std']
-      ]},
-      { name: 'FORM 23 SIGN-OFF & FINDINGS', items: [
-        ['All non-compliances photographed', 'std'],
-        ['Non-compliances categorised by AS 1926.1 clause', 'std'],
-        ['Remediation guidance provided', 'std'],
-        ['Re-inspection date set if applicable', 'std'],
-        ['Form 23 — Pool Barrier Compliance signed', 'std'],
-        ['Form 23 lodged with Council within 30 days', 'std'],
-        ['Compliance certificate provided to owner', 'std'],
-        ['Inspector indemnity insurance current', 'std']
-      ]}
-    ]
-  }
+/* Add a "Reset locations for this inspection type" option */
+window.mbResetLocations = function() {
+  if (!confirm('Reset locations to defaults for this inspection type? Custom locations will be removed.')) return;
+  const cur = PROJECT.inspections && PROJECT.inspections.currentType;
+  if (!cur) return;
+  applyLocationsForInspectionType(cur);
+  PROJECT.locations.custom = [];
+  if (typeof saveProject === 'function') saveProject(true);
+  haptic(8);
+  showToast('✓ Locations reset for ' + cur, 'ok');
+  if (typeof mbCloseSheet === 'function') mbCloseSheet();
+  renderMobilePage();
 };
 
-/* ---------- 4. DILAPIDATION — EXPANDED ---------- */
-const PHASE_G_DILAPIDATION_EXPANDED = {
-  Dilapidation: {
-    name: 'Dilapidation Report — Pre & Post Construction',
-    standard: 'Industry practice / Insurance & legal evidence requirements',
-    scope: 'Comprehensive photographic and written record of existing condition prior to (or following) adjacent or proximate construction works. Establishes a defensible baseline for damage attribution and insurance claims. Used in VCAT, Magistrates Court and PI claims.',
+/* Inject reset button into location picker */
+(function injectLocationReset() {
+  if (typeof mbOpenLocationPicker !== 'function') return;
+  const orig = window.mbOpenLocationPicker;
+  window.mbOpenLocationPicker = function() {
+    orig.apply(this, arguments);
+    /* Append reset button to the bottom sheet */
+    setTimeout(function() {
+      const sheet = document.querySelector('.mb-sheet');
+      if (!sheet) return;
+      if (sheet.querySelector('#locResetBtn')) return;
+      const resetBtn = document.createElement('button');
+      resetBtn.id = 'locResetBtn';
+      resetBtn.className = 'mb-detail-btn';
+      resetBtn.style.cssText = 'width:100%;margin-top:8px;background:#fff7ed;color:#92400e';
+      resetBtn.textContent = '↻ Reset to default locations for this inspection type';
+      resetBtn.onclick = function() { mbResetLocations(); };
+      sheet.appendChild(resetBtn);
+    }, 100);
+  };
+})();
+
+console.log('[Phase G part 1] Photos sections + location relevance + popup suppression loaded');
+
+
+
+/* ============================================================
+   PHASE G — PART 2: COMPREHENSIVE TEMPLATE EXPANSIONS
+   ============================================================ */
+
+const PHASE_G_TEMPLATES = {
+
+  /* ---- POOL & SPA SAFETY — COMPREHENSIVE ~120 items ---- */
+  PoolSafety: {
+    name: 'Swimming Pool & Spa Safety Inspection',
+    standard: 'AS 1926.1 (year per pool construction date) + Building Regulations 2018 r144 + Public Health & Wellbeing Regs 2019',
+    scope: 'Comprehensive audit of swimming pool/spa safety barrier per AS 1926.1 and Victorian Building Regulations 2018 r144. Identifies the applicable standard based on construction year. Includes Council notice & registration assessment for the 4-yearly compliance cycle.',
     sections: [
-      { name: 'PROPERTY & SCOPE DOCUMENTATION', items: [
-        ['Property address verified against title', 'std'],
-        ['Date and time of inspection recorded', 'std'],
-        ['Weather conditions at inspection (rain affecting visibility)', 'std'],
-        ['Adjacent works details — builder, scope, expected duration', 'std'],
-        ['Distance from adjacent works to subject property recorded', 'std'],
-        ['Inspector engaged by — owner / builder / insurer / VCAT', 'std'],
-        ['Owner / occupier present during inspection — name recorded', 'std'],
-        ['Areas of property unable to be accessed listed', 'std'],
-        ['Survey limitations acknowledged', 'std'],
-        ['Sketch / mud map of property prepared', 'std']
+      { name: 'POOL DETAILS & APPLICABLE STANDARD', items: [
+        ['Pool construction year recorded', 'std'],
+        ['Pool type — in-ground / above-ground / portable / spa', 'std'],
+        ['Pool water depth — maximum and minimum', 'std'],
+        ['Pool surface area (m²)', 'std'],
+        ['Pool / spa capacity (litres)', 'comp'],
+        ['Barrier construction year (may differ from pool)', 'std'],
+        ['Latest renovation / barrier replacement year', 'std'],
+        ['Applicable AS 1926.1 version — pre-1991 (none mandatory)', 'std'],
+        ['Applicable AS 1926.1 version — 1991-2010 (AS 1926-1986/1993)', 'std'],
+        ['Applicable AS 1926.1 version — 2010-2019 (AS 1926.1-2007)', 'std'],
+        ['Applicable AS 1926.1 version — 2019+ (AS 1926.1-2012)', 'std'],
+        ['Pool registered on Vic Pool & Spa Register', 'std'],
+        ['VBA registration number recorded', 'std']
+      ]},
+      { name: 'COUNCIL NOTICE & REGISTRATION', items: [
+        ['Council Notice received — date noted', 'std'],
+        ['Council Notice response deadline noted', 'std'],
+        ['Property registered with municipal council', 'std'],
+        ['Municipal council registration number recorded', 'std'],
+        ['4-yearly Form 23 inspection cycle status', 'std'],
+        ['Date of last Form 23 lodged with Council', 'std'],
+        ['Date of next required Form 23 inspection', 'std'],
+        ['Current Certificate of Compliance / Form 23 available', 'std'],
+        ['Certificate of Barrier Non-Compliance (Form 24) — if applicable', 'std'],
+        ['Council Notice of Barrier Defect — if served', 'std'],
+        ['Building permit for pool construction available', 'comp'],
+        ['Building permit for barrier construction available', 'std'],
+        ['Occupancy permit / Certificate of Final Inspection', 'comp']
+      ]},
+      { name: 'BARRIER — HEIGHT & DIMENSIONS (per side)', items: [
+        ['North barrier effective height ≥ 1200mm external', 'std'],
+        ['South barrier effective height ≥ 1200mm external', 'std'],
+        ['East barrier effective height ≥ 1200mm external', 'std'],
+        ['West barrier effective height ≥ 1200mm external', 'std'],
+        ['Boundary fence as barrier ≥ 1800mm external face', 'std'],
+        ['Barrier height measured from finished surface level', 'std'],
+        ['Gap below barrier ≤ 100mm at all points', 'std'],
+        ['Vertical members ≤ 100mm apart', 'std'],
+        ['Mesh apertures ≤ 13mm if effective height < 2400mm', 'std'],
+        ['Mesh apertures ≤ 100mm if effective height ≥ 2400mm', 'comp'],
+        ['Strainer wire top of mesh — adequate tension', 'std'],
+        ['Strainer wire bottom of mesh', 'std'],
+        ['Barrier material — durability for outdoor exposure', 'std'],
+        ['Barrier — no damage, holes, gaps', 'std'],
+        ['Posts secure — not loose or leaning', 'std']
+      ]},
+      { name: 'NON-CLIMBABLE ZONE (NCZ) — EXTERNAL', items: [
+        ['NCZ 900mm radius on barrier outside maintained', 'std'],
+        ['No climbable horizontal members within 1100mm below top', 'std'],
+        ['Projections > 10mm not closer than 900mm', 'std'],
+        ['Trees within NCZ assessed — branches and trunk', 'std'],
+        ['Shrubs within NCZ removed or trimmed below', 'std'],
+        ['Pot plants not within NCZ', 'std'],
+        ['Pool furniture not within NCZ', 'std'],
+        ['BBQ / outdoor kitchen not within NCZ', 'std'],
+        ['Toys / play equipment not within NCZ', 'std'],
+        ['Garden taps / hoses not within NCZ', 'comp'],
+        ['Climbable retaining walls (high side) — additional barrier provisions', 'std'],
+        ['Stacked objects / firewood not within NCZ', 'std']
+      ]},
+      { name: 'NCZ — INTERNAL & ABOVE', items: [
+        ['NCZ inside (300mm from top) clear', 'std'],
+        ['Horizontal members on pool-side ≤ 100mm wide', 'std'],
+        ['No climbing aids inside barrier', 'comp'],
+        ['Spaces between barrier top members not climbable', 'comp']
+      ]},
+      { name: 'GATES — PER GATE INSPECTED INDIVIDUALLY', items: [
+        ['Gate 1 — self-closes from any open position', 'std'],
+        ['Gate 1 — self-latches reliably', 'std'],
+        ['Gate 1 — latch ≥ 1500mm above ground inside', 'std'],
+        ['Gate 1 — opens AWAY from pool', 'std'],
+        ['Gate 1 — hinges in good condition', 'std'],
+        ['Gate 1 — gap between gate and post ≤ 100mm', 'std'],
+        ['Gate 1 — magnetic / mechanical latch functioning', 'std'],
+        ['Gate 1 — finger guard or restricted opening direction', 'comp'],
+        ['Gate 2 — if present, all of above', 'std'],
+        ['Gate 3 — if present, all of above', 'std'],
+        ['Pedestrian access gate — sweet self-close range', 'std'],
+        ['Service / pool equipment gate (if separate)', 'comp']
+      ]},
+      { name: 'WINDOWS INTO POOL AREA', items: [
+        ['Window 1 — sill height from inside floor recorded', 'std'],
+        ['Window 1 — restrictor present if sill < 1200mm', 'std'],
+        ['Window 1 — restrictor opening ≤ 100mm', 'std'],
+        ['Window 2 — sill height recorded', 'std'],
+        ['Window 2 — restrictor present if sill < 1200mm', 'std'],
+        ['All bedroom windows assessed for restrictors', 'std'],
+        ['Bathroom windows into pool zone — restrictor / obscure', 'std'],
+        ['Window restrictors — tool required to override', 'std'],
+        ['Window screens NOT relied upon as restrictor', 'std']
+      ]},
+      { name: 'DOORS INTO POOL AREA', items: [
+        ['Door 1 — self-closing from inside', 'std'],
+        ['Door 1 — self-latching from inside', 'std'],
+        ['Door 1 — latch ≥ 1500mm above floor inside', 'std'],
+        ['Door 1 — opens AWAY from pool', 'std'],
+        ['Door 2 — if present, all of above', 'std'],
+        ['Glass sliding doors — safety glazing Grade A', 'std'],
+        ['Flyscreen doors NOT relied on as barrier', 'std'],
+        ['Pet door / cat flap — not in pool barrier', 'std']
+      ]},
+      { name: 'POOL SHELL & SURROUNDS', items: [
+        ['Pool shell — no major cracks or leakage', 'std'],
+        ['Pool tile lippage acceptable', 'std'],
+        ['No loose tiles or coping', 'std'],
+        ['Pool coping secure', 'std'],
+        ['Pool surrounds slip-resistant (R10 or better)', 'std'],
+        ['Pool depth markings visible', 'std'],
+        ['Pool fittings (skimmer box, returns) flush / safe', 'comp'],
+        ['Ladder secure (above-ground pool)', 'std'],
+        ['Steps in good condition', 'std'],
+        ['Pool covers / nets — not relied as barrier', 'std']
+      ]},
+      { name: 'ELECTRICAL & POOL EQUIPMENT', items: [
+        ['Pool pump RCD protected', 'std'],
+        ['Pool electrical bonding / equipotential', 'std'],
+        ['Electrical fittings in pool zone IP rated', 'std'],
+        ['Pool lighting — extra low voltage where required', 'std'],
+        ['Chlorinator / salt water cell — exclusion zone clear', 'comp'],
+        ['Heat pump / heater — separation from barrier', 'comp'],
+        ['Pool pump enclosure secure', 'comp']
+      ]},
+      { name: 'CPR & SAFETY SIGNAGE', items: [
+        ['CPR / resuscitation sign — present', 'std'],
+        ['CPR sign visible from pool area', 'std'],
+        ['CPR sign meets current First Aid guidelines (ARC 2021)', 'std'],
+        ['CPR sign condition — not faded or damaged', 'std'],
+        ['CPR sign location adjacent to or attached to barrier', 'std'],
+        ['Emergency contact / phone signage', 'comp']
+      ]},
+      { name: 'SPA SPECIFIC (if present)', items: [
+        ['Spa cover — operational', 'std'],
+        ['Spa cover — lockable and locked when not in use', 'std'],
+        ['Spa cover — load rating 200kg+ child resistant', 'std'],
+        ['Spa drain entrapment compliance (AS 3979 / VGB)', 'std'],
+        ['Spa not located within pool barrier (if separate)', 'comp']
+      ]},
+      { name: 'REMEDIAL FINDINGS & NEXT STEPS', items: [
+        ['Compliance status — Form 23 issuable?', 'std'],
+        ['List of non-compliances for written report', 'std'],
+        ['Form 24 (Non-compliance) trigger items', 'std'],
+        ['Recommended rectifications priority list', 'std'],
+        ['Re-inspection date scheduled', 'std'],
+        ['Lodgement plan with Council', 'std']
+      ]}
+    ]
+  },
+
+  /* ---- DILAPIDATION — EXPANDED ~110 items ---- */
+  Dilapidation: {
+    name: 'Dilapidation Report (Pre/Post Construction)',
+    standard: 'Industry practice / Insurance & legal documentation / Building Regulations 2018 Reg 116 (protection works)',
+    scope: 'Comprehensive photographic and written record of the existing condition of the property and its surrounds, prior to (or following) adjacent construction works. Documents all visible defects, cracks, distortions and movement-related damage as a baseline for comparison post-works.',
+    sections: [
+      { name: 'PROPERTY & ENGAGEMENT DETAILS', items: [
+        ['Property address documented in full', 'std'],
+        ['Title details (lot / plan) recorded', 'std'],
+        ['Date of inspection recorded', 'std'],
+        ['Time of inspection recorded', 'std'],
+        ['Inspector engaged by (party identified)', 'std'],
+        ['Adjacent works builder name', 'std'],
+        ['Adjacent works builder licence #', 'std'],
+        ['Adjacent works scope (excavation / demolition / piling / construction)', 'std'],
+        ['Distance between adjacent works and subject property', 'std'],
+        ['Reason for engagement — pre / post / interim', 'std'],
+        ['Weather conditions at inspection', 'std'],
+        ['Light conditions at inspection', 'std']
       ]},
       { name: 'EXTERNAL — FRONT ELEVATION', items: [
-        ['Wall material identified (brick / render / weatherboard / cladding)', 'std'],
-        ['Cracking — mapped with location, length, width (mm) for each crack', 'std'],
-        ['Crack categories per CSIRO BCC 21 (0-4)', 'std'],
-        ['Render condition — cracks, drummy areas, delamination', 'std'],
-        ['Paint condition — peeling, fading, substrate moisture', 'std'],
-        ['Window frames — operation, sealants, glazing condition', 'std'],
-        ['Door frames — operation, sealants, gap consistency', 'std'],
-        ['Roof line — sag, distortion, ridge line straight', 'std'],
-        ['Eaves / fascia condition', 'std'],
-        ['Soffit condition', 'comp'],
-        ['Downpipe attachments / discharge', 'std'],
-        ['DPC visible / above ground line', 'std'],
-        ['Weep holes clear', 'comp']
+        ['Wall material identified', 'std'],
+        ['All wall cracking mapped and photographed', 'std'],
+        ['Crack widths measured (recorded if > 0.5mm)', 'std'],
+        ['Render condition — cracks, delamination', 'std'],
+        ['Paint condition — flaking, separation', 'std'],
+        ['Windows — frames, glazing, operation', 'std'],
+        ['Doors — frames, operation, clearances', 'std'],
+        ['Sills and lintels condition', 'std'],
+        ['Roof line — sag, distortion, alignment', 'std'],
+        ['Eaves / fascia / soffit condition', 'std'],
+        ['External pipes/conduits — alignment and fixings', 'comp']
       ]},
       { name: 'EXTERNAL — REAR ELEVATION', items: [
-        ['Wall material and condition recorded', 'std'],
-        ['Cracking mapped with measurements', 'std'],
+        ['Wall material identified', 'std'],
+        ['All cracking mapped and photographed', 'std'],
+        ['Crack widths measured', 'std'],
         ['Render / paint condition', 'std'],
-        ['Windows / doors operation', 'std'],
+        ['Windows and doors — operation, condition', 'std'],
         ['Roof line condition', 'std'],
-        ['Eaves / fascia / soffits', 'std'],
-        ['Alfresco / deck condition', 'comp']
+        ['Outdoor deck / patio attachment to building', 'comp']
       ]},
-      { name: 'EXTERNAL — LEFT SIDE', items: [
-        ['Wall material and condition', 'std'],
-        ['Cracking mapped (especially boundary side)', 'std'],
-        ['Render / paint condition', 'std'],
-        ['Boundary clearance', 'comp'],
-        ['Side access path condition', 'comp']
+      { name: 'EXTERNAL — LEFT ELEVATION', items: [
+        ['Wall material and cracking documented', 'std'],
+        ['Crack widths recorded', 'std'],
+        ['Windows / doors documented', 'std'],
+        ['Building services attached (gas, electrical) documented', 'comp']
       ]},
-      { name: 'EXTERNAL — RIGHT SIDE', items: [
-        ['Wall material and condition', 'std'],
-        ['Cracking mapped (especially boundary side)', 'std'],
-        ['Render / paint condition', 'std'],
-        ['Boundary clearance', 'comp'],
-        ['Side access path condition', 'comp']
+      { name: 'EXTERNAL — RIGHT ELEVATION', items: [
+        ['Wall material and cracking documented', 'std'],
+        ['Crack widths recorded', 'std'],
+        ['Windows / doors documented', 'std']
       ]},
       { name: 'PAVING & EXTERNAL FLATWORK', items: [
-        ['Driveway material and condition', 'std'],
-        ['Driveway cracking — mapped with location and width', 'std'],
+        ['Driveway material identified', 'std'],
+        ['Driveway cracks mapped — width and location', 'std'],
         ['Driveway lippage / settlement', 'std'],
-        ['Crossover condition', 'std'],
-        ['Front path condition', 'std'],
-        ['Rear yard paving condition', 'std'],
-        ['Pool surrounds cracks / settlement', 'comp'],
-        ['Outdoor entertainment area paving', 'comp']
+        ['Front path cracks and lippage', 'std'],
+        ['Rear path cracks and lippage', 'std'],
+        ['Side path condition', 'std'],
+        ['Patio / pergola flatwork', 'std'],
+        ['Pool area surrounds — cracks, settlement', 'comp'],
+        ['Crossover / kerb condition at boundary', 'std'],
+        ['Drainage pits and grates — alignment', 'comp']
       ]},
       { name: 'RETAINING WALLS', items: [
-        ['Retaining wall locations identified', 'std'],
-        ['Retaining wall heights recorded', 'std'],
-        ['Lean / out-of-plumb measured', 'std'],
-        ['Cracking in retaining walls mapped', 'std'],
-        ['Weep holes condition', 'comp'],
-        ['Subsurface drainage condition (where visible)', 'comp']
+        ['Retaining wall — front', 'std'],
+        ['Retaining wall — rear', 'std'],
+        ['Retaining wall — left', 'std'],
+        ['Retaining wall — right', 'std'],
+        ['Retaining wall — height, material, lean documented', 'std'],
+        ['Cracking, displacement, weep holes condition', 'std']
       ]},
-      { name: 'BOUNDARY FENCES', items: [
-        ['Front fence — type, height, condition', 'std'],
-        ['Side fence (left) — condition', 'std'],
-        ['Side fence (right) — condition', 'std'],
-        ['Rear fence — condition', 'std'],
-        ['Fence posts plumb', 'std'],
-        ['Pre-existing lean / movement', 'std'],
-        ['Gates operation', 'comp']
+      { name: 'BOUNDARY & FENCING', items: [
+        ['Front fence condition', 'std'],
+        ['Rear fence condition', 'std'],
+        ['Left fence condition', 'std'],
+        ['Right fence condition', 'std'],
+        ['Common boundary with adjoining works site — detailed', 'std'],
+        ['Fence height, plumb, fixings', 'std']
       ]},
-      { name: 'INTERIOR — Per Room (replicate for each)', items: [
-        ['Room identified and labelled', 'std'],
-        ['Wall material recorded', 'std'],
-        ['Cracking — every wall photographed with measurements', 'std'],
-        ['Crack location, length, width (mm) recorded', 'std'],
-        ['Ceiling — condition, cracking, sag, staining', 'std'],
-        ['Cornice / ceiling junction condition', 'std'],
-        ['Floor — material, level, cracking', 'std'],
-        ['Floor tile cracks / grout damage', 'std'],
-        ['Door — operation, gap consistency', 'std'],
-        ['Doors not closing properly — existing', 'std'],
-        ['Window operation', 'std'],
-        ['Cracks above doorways / windows specifically', 'std'],
-        ['Skirting / architrave condition', 'comp']
+      { name: 'INTERIOR — Entry / Hallway', items: [
+        ['Wall cracking — every wall photographed', 'std'],
+        ['Ceiling cracking — photographed', 'std'],
+        ['Floor — cracking, tile lippage', 'std'],
+        ['Door — operation, gaps, closure', 'std'],
+        ['Skirtings — separation from walls', 'comp']
       ]},
-      { name: 'WET AREAS — Per Bathroom / Ensuite / Laundry', items: [
-        ['Floor tile condition / cracking', 'std'],
-        ['Wall tile condition / cracking / lippage', 'std'],
-        ['Grout condition', 'std'],
-        ['Shower base condition', 'std'],
-        ['Visible moisture / damage signs', 'std'],
-        ['Toilet seal / pan condition', 'comp']
+      { name: 'INTERIOR — Lounge / Living', items: [
+        ['Wall cracking — every wall photographed', 'std'],
+        ['Ceiling cracking — photographed', 'std'],
+        ['Cracks above doorways / windows', 'std'],
+        ['Floor — covering condition, separations', 'std'],
+        ['Windows — operation, glazing intact', 'std'],
+        ['Skirtings / cornice — separations', 'comp']
       ]},
-      { name: 'SUB-FLOOR INSPECTION', items: [
-        ['Access details — entry point, accessible area', 'std'],
-        ['Pre-existing cracks in slab / footing mapped', 'std'],
+      { name: 'INTERIOR — Dining / Kitchen', items: [
+        ['Wall cracking documented', 'std'],
+        ['Ceiling cracking documented', 'std'],
+        ['Tile cracks at splashback', 'std'],
+        ['Cabinet alignment to walls', 'comp'],
+        ['Bench top joint condition', 'comp']
+      ]},
+      { name: 'INTERIOR — Bedrooms (each)', items: [
+        ['Wall cracking per bedroom', 'std'],
+        ['Ceiling cracking per bedroom', 'std'],
+        ['Window operation per bedroom', 'std'],
+        ['Robe alignment to wall', 'comp']
+      ]},
+      { name: 'INTERIOR — Wet Areas', items: [
+        ['Bathroom wall tile cracking', 'std'],
+        ['Bathroom floor tile cracking / lippage', 'std'],
+        ['Grout integrity', 'std'],
+        ['Ensuite — same items', 'std'],
+        ['Laundry — wall and floor', 'std'],
+        ['Powder room — wall and floor', 'comp']
+      ]},
+      { name: 'STAIRS / LANDINGS', items: [
+        ['Stair structure — visible separation', 'std'],
+        ['Treads — gap to riser', 'comp'],
+        ['Handrail — secure, no separation', 'std'],
+        ['Landing floor condition', 'std']
+      ]},
+      { name: 'SUB-FLOOR & ROOF VOID', items: [
+        ['Sub-floor accessibility documented', 'std'],
+        ['Pre-existing cracks in slab / footing', 'std'],
         ['Brickwork lean / movement in sub-floor', 'std'],
-        ['Stump condition (where applicable)', 'std'],
-        ['Bearer / joist condition', 'std'],
-        ['Damp / moisture signs', 'std'],
-        ['Cobwebs / dust patterns (indicate timeframe)', 'comp']
+        ['Stumps / piers — lean, plumb', 'std'],
+        ['Roof void accessibility', 'std'],
+        ['Roof void framing — existing condition', 'std'],
+        ['Truss connections — existing', 'comp'],
+        ['Roof tile / sheet alignment', 'std']
       ]},
-      { name: 'ROOF VOID INSPECTION', items: [
-        ['Roof void access details', 'std'],
-        ['Truss / rafter condition', 'std'],
-        ['Truss connections — existing condition', 'std'],
-        ['Sarking condition', 'std'],
-        ['Insulation condition / displacement', 'comp'],
-        ['Evidence of past leaks — staining', 'std'],
-        ['Wall plate condition at junctions', 'comp']
+      { name: 'TREES & VEGETATION', items: [
+        ['Trees within 1.5m of structure identified', 'std'],
+        ['Trees on shared boundary photographed', 'std'],
+        ['Tree species / approximate height', 'comp'],
+        ['Visible root encroachment', 'std'],
+        ['Vegetation against walls', 'comp']
       ]},
-      { name: 'CRACK MONITORING SETUP (if recommended)', items: [
-        ['Tell-tales installed on significant existing cracks', 'comp'],
-        ['Tell-tale locations photographed', 'comp'],
-        ['Tell-tale initial readings recorded', 'comp'],
-        ['Recommended monitoring frequency stated', 'comp'],
-        ['Survey-grade benchmark for vertical settlement', 'comp']
-      ]},
-      { name: 'ADJOINING PROPERTY IMPACT ASSESSMENT', items: [
-        ['Direction and proximity to construction works recorded', 'std'],
-        ['Risk-graded zones identified (high / medium / low risk)', 'std'],
-        ['Specific risk items identified (excavation depth, vibration)', 'std'],
-        ['Recommendations to builder for protection works', 'std']
+      { name: 'SERVICES — VISIBLE CONDITION', items: [
+        ['Sewer / stormwater pits — alignment', 'std'],
+        ['Water meter — condition', 'comp'],
+        ['Gas meter — alignment to wall', 'comp'],
+        ['Switchboard mounting', 'comp'],
+        ['Visible plumbing pipes alignment', 'std']
       ]},
       { name: 'SUMMARY & ANNOTATION', items: [
         ['All defects numbered and cross-referenced to photos', 'std'],
-        ['Crack widths measured and recorded in mm', 'std'],
-        ['Photo log compiled with location reference', 'std'],
-        ['Crack monitoring tell-tales recommended (where needed)', 'std'],
-        ['Statement of inspection limitations included', 'std'],
-        ['Survey-grade levels recommended where structural movement suspected', 'comp']
+        ['Crack widths measured and recorded systematically', 'std'],
+        ['Crack monitoring tell-tales recommended if needed', 'std'],
+        ['Statement of inspection limitations documented', 'std'],
+        ['Inspector signature / VBA registration recorded', 'std'],
+        ['Photo evidence indexed', 'std'],
+        ['Comparable photos planned for post-construction', 'std']
       ]}
     ]
   }
 };
 
-/* ---------- Apply Phase G template expansions ---------- */
-(function applyPhaseGExpansions() {
+/* Apply Phase G template expansions */
+(function applyPhaseGTemplates() {
   if (typeof INSPECTION_TYPES === 'undefined') return;
   
-  const merged = Object.assign({}, PHASE_G_POOL_COMPREHENSIVE, PHASE_G_DILAPIDATION_EXPANDED);
-  
-  Object.keys(merged).forEach(typeId => {
-    const tpl = merged[typeId];
-    const existing = INSPECTION_TYPES.find(t => t.id === typeId);
+  Object.keys(PHASE_G_TEMPLATES).forEach(function(typeId) {
+    const tpl = PHASE_G_TEMPLATES[typeId];
+    const existing = INSPECTION_TYPES.find(function(t) { return t.id === typeId; });
     
     const flatItems = [];
     const sectionMap = [];
     const stdMarks = [];
     
-    tpl.sections.forEach(sec => {
-      sec.items.forEach(item => {
-        const [label, level] = item;
-        flatItems.push(label);
+    tpl.sections.forEach(function(sec) {
+      sec.items.forEach(function(item) {
+        flatItems.push(item[0]);
         sectionMap.push(sec.name);
-        stdMarks.push(level);
+        stdMarks.push(item[1]);
       });
     });
     
@@ -16250,208 +16593,777 @@ const PHASE_G_DILAPIDATION_EXPANDED = {
     }
   });
   
-  console.log('[Phase G] Expanded Pool to', INSPECTION_TYPES.find(t=>t.id==='PoolSafety').items.length, 'items');
-  console.log('[Phase G] Expanded Dilapidation to', INSPECTION_TYPES.find(t=>t.id==='Dilapidation').items.length, 'items');
+  console.log('[Phase G] Templates expanded:', Object.keys(PHASE_G_TEMPLATES).length);
 })();
 
-/* ---------- 5. PHOTO COLLECTIONS ---------- */
-window.mbUploadGeneralPhoto = function(collection) {
-  /* collection: 'site' | 'limitations' */
-  const input = document.createElement('input');
-  input.type = 'file';
-  input.accept = 'image/*';
-  input.capture = 'environment';
-  input.multiple = true;
-  input.onchange = (e) => {
-    const files = e.target.files;
-    if (!files || !files.length) return;
-    let pending = files.length;
-    Array.from(files).forEach(f => {
+/* ---------- 5. PRE-PURCHASE B+P FOCUSED EXPANSION ---------- */
+/* Add more depth to existing PrePurchaseBP without rewriting entire template.
+   We append new sections covering deeper detail. */
+(function expandPrePurchase() {
+  if (typeof INSPECTION_TYPES === 'undefined') return;
+  const pp = INSPECTION_TYPES.find(function(t) { return t.id === 'PrePurchaseBP'; });
+  if (!pp || !pp._sectionGroups) return;
+  
+  /* Extra sections to add */
+  const extraSections = [
+    { name: 'ROOF VOID — DETAILED INSPECTION', items: [
+      ['Access manhole size — adequate for safe entry', 'std'],
+      ['Access manhole — lockable / safety latch', 'std'],
+      ['Ceiling joist sizes documented', 'comp'],
+      ['Truss types identified (girder / common / hip)', 'comp'],
+      ['Truss connection plates — corrosion or damage', 'comp'],
+      ['Lateral restraint of trusses (battens, ties)', 'comp'],
+      ['Roof penetration sealing from inside', 'std'],
+      ['Insulation type identified', 'std'],
+      ['Insulation R-value estimate', 'comp'],
+      ['Insulation displacement / gaps', 'std'],
+      ['Downlight covers in place', 'std'],
+      ['Flues / vents — safe clearance to combustibles', 'std'],
+      ['Electrical junctions — accessible boxes', 'std'],
+      ['Cabling supported and clipped', 'comp'],
+      ['Water staining patterns mapped', 'std'],
+      ['Active leaks visible at time of inspection', 'std'],
+      ['Pest evidence — droppings, nesting', 'std'],
+      ['Termite mudding / carton', 'std'],
+      ['Borer evidence — exit holes, frass', 'std']
+    ]},
+    { name: 'SUB-FLOOR — DETAILED INSPECTION', items: [
+      ['Access type — manhole / hatch / open', 'std'],
+      ['Sub-floor clearance height recorded', 'std'],
+      ['Soil / floor surface condition', 'std'],
+      ['Standing water present', 'std'],
+      ['Moisture levels (visual / meter)', 'std'],
+      ['Cross-flow ventilation — adequate openings', 'std'],
+      ['Vent positioning — vermin protection', 'std'],
+      ['Vent obstruction — earth, debris, plants', 'std'],
+      ['Bearer sizes documented', 'std'],
+      ['Bearer condition — rot, splits, crushing', 'std'],
+      ['Bearer connection to stumps', 'std'],
+      ['Joist sizes and spacing documented', 'std'],
+      ['Joist condition — rot, splits, deflection', 'std'],
+      ['Stumps / piers — material (concrete / timber / brick)', 'std'],
+      ['Stumps — lean, settlement, ant cap', 'std'],
+      ['Ant caps — fitted, intact, sealed', 'std'],
+      ['Termite Part A barrier present', 'std'],
+      ['Termite Part B chemical zone — age, service tag', 'std'],
+      ['Active termite workings — mudding, galleries', 'std'],
+      ['Past termite damage — galleries', 'std'],
+      ['Wood decay — brown rot, white rot', 'std'],
+      ['Borer evidence', 'std'],
+      ['Conducive conditions — moisture sources', 'std'],
+      ['Plumbing leaks visible', 'std'],
+      ['Soil-timber contact (structural elements)', 'std'],
+      ['Sub-floor stored material (termite risk)', 'std'],
+      ['Slab edge exposure / damage', 'comp']
+    ]},
+    { name: 'WET AREAS — COMPREHENSIVE PER ROOM', items: [
+      ['Main Bathroom — floor falls to waste verified', 'std'],
+      ['Main Bathroom — shower hob waterproofing visible', 'std'],
+      ['Main Bathroom — wall tile lippage check', 'std'],
+      ['Main Bathroom — silicone joint condition', 'std'],
+      ['Main Bathroom — exhaust fan operates and vents exterior', 'std'],
+      ['Main Bathroom — door undercut for airflow', 'comp'],
+      ['Ensuite — same items as Main Bathroom', 'std'],
+      ['Powder room — sealant integrity', 'std'],
+      ['Laundry — trough drainage', 'std'],
+      ['Laundry — floor waste operation', 'std'],
+      ['Laundry — washing machine connections', 'std'],
+      ['Kitchen — splashback sealant', 'std'],
+      ['Kitchen — sink waste connection', 'std'],
+      ['Kitchen — under-sink leak check', 'std'],
+      ['Kitchen — dishwasher connection (if present)', 'comp'],
+      ['Waterproofing membrane evidence (where visible)', 'std'],
+      ['Mould evidence in any wet area', 'std']
+    ]},
+    { name: 'ELECTRICAL — DEEPER CHECK', items: [
+      ['Switchboard — labelling clear and current', 'std'],
+      ['Switchboard — number of circuits documented', 'std'],
+      ['RCDs — count and types (Type A/AC)', 'std'],
+      ['RCDs — push-test recommended in report', 'std'],
+      ['Main earth — visible at switchboard', 'std'],
+      ['Switchboard meter housing condition', 'comp'],
+      ['Sample GPO test — random outlets', 'std'],
+      ['Outdoor outlets — weatherproof condition', 'std'],
+      ['Pool / spa electrical — RCD protected', 'comp'],
+      ['Visible cabling damage (e.g. roof void)', 'std'],
+      ['Solar PV — inverter location and condition', 'comp'],
+      ['EV charger (if present) — installation safety', 'comp'],
+      ['Smoke alarm test — all alarms', 'std'],
+      ['Smoke alarm interconnection verified', 'std']
+    ]},
+    { name: 'PLUMBING — DEEPER CHECK', items: [
+      ['Hot water system age and type', 'std'],
+      ['Hot water system relief drain to exterior', 'std'],
+      ['Hot water system tempering valve — verified', 'std'],
+      ['Main water shut-off valve — accessible', 'std'],
+      ['Water meter — leak check (with all fixtures off)', 'std'],
+      ['Water pressure — adequate at multiple fixtures', 'std'],
+      ['Hot water delivery time / temperature', 'std'],
+      ['Drainage — runs free at all fixtures', 'std'],
+      ['Toilet flush operation — each toilet', 'std'],
+      ['Toilet cistern condition', 'std'],
+      ['External taps — operation, backflow', 'std'],
+      ['Visible plumbing leaks (kitchen, laundry, sub-floor)', 'std'],
+      ['Hose taps — vacuum breakers fitted', 'comp'],
+      ['Garden tap — backflow prevention if connected to irrigation', 'comp']
+    ]}
+  ];
+  
+  /* Append these to PrePurchaseBP */
+  extraSections.forEach(function(sec) {
+    pp._sectionGroups.push(sec);
+    sec.items.forEach(function(item) {
+      pp.items.push(item[0]);
+      pp._sections.push(sec.name);
+      pp._stdMarks.push(item[1]);
+    });
+  });
+  
+  /* Reset cached origItems so the toggle logic re-fetches */
+  pp._origItems = pp.items.slice();
+  pp._origSections = pp._sections.slice();
+  
+  console.log('[Phase G] PrePurchaseBP expanded to', pp.items.length, 'items');
+})();
+
+console.log('[Phase G part 2] Comprehensive Pool + Dilapidation + Pre-Purchase expansion loaded');
+
+
+
+/* ============================================================
+   PHASE H — AI INTEGRATION (V27) — make it actually work
+   1. Suppress popup on desktop too
+   2. AI Test Button — diagnose Gemini issues
+   3. Per-feature AI routing
+   4. Real Gemini/Claude/OpenAI for Document Upload Run AI
+   5. AI defect rewrite on mobile items
+   6. AI photo scanning on mobile items
+   ============================================================ */
+
+/* ---------- 1. SUPPRESS POPUP EVERYWHERE ---------- */
+(function killPopupCompletely() {
+  if (typeof autoTemplates !== 'function') return;
+  const orig = window.autoTemplates;
+  window.autoTemplates = function() {
+    const origAlert = window.alert;
+    window.alert = function(msg) {
+      /* If it's the templates-populated message, swallow. Otherwise let through. */
+      if (msg && typeof msg === 'string' && msg.indexOf('Templates populated') > -1) {
+        return; /* eat it */
+      }
+      return origAlert.call(this, msg);
+    };
+    try { orig.apply(this, arguments); } catch(e) { console.warn(e); }
+    window.alert = origAlert;
+  };
+})();
+
+/* ---------- 2. AI CONFIG HELPERS ---------- */
+function getAIConfig(providerId) {
+  const ai = (PROJECT.settings && PROJECT.settings.ai) || {};
+  return ai[providerId] || {};
+}
+
+function getEnabledAIProviders() {
+  const ai = (PROJECT.settings && PROJECT.settings.ai) || {};
+  const r = [];
+  if (ai.google && ai.google.key && ai.google.key.length > 10) r.push({ id: 'google', name: 'Gemini', cfg: ai.google });
+  if (ai.claude && ai.claude.key && ai.claude.key.length > 10) r.push({ id: 'claude', name: 'Claude', cfg: ai.claude });
+  if (ai.chatgpt && ai.chatgpt.key && ai.chatgpt.key.length > 10) r.push({ id: 'chatgpt', name: 'ChatGPT', cfg: ai.chatgpt });
+  return r;
+}
+
+/* Get the routed provider for a feature; falls back to any enabled */
+function getProviderForFeature(featureName) {
+  const ai = (PROJECT.settings && PROJECT.settings.ai) || {};
+  const routing = ai.routing || {};
+  const featureRouting = ai.featureRouting || {};
+  
+  /* featureRouting may be like { defectWriting: 'google', imageScan: 'claude', mentorChat: 'google', documents: 'google' } */
+  const routedName = featureRouting[featureName] || routing.chat || 'google';
+  
+  /* Normalize to provider ID */
+  let providerId = routedName;
+  if (typeof routedName === 'string') {
+    const n = routedName.toLowerCase();
+    if (n.includes('gemini') || n === 'google') providerId = 'google';
+    else if (n.includes('claude')) providerId = 'claude';
+    else if (n.includes('gpt') || n.includes('chat') || n.includes('openai')) providerId = 'chatgpt';
+  }
+  
+  const cfg = ai[providerId];
+  if (cfg && cfg.key && cfg.key.length > 10) {
+    return { id: providerId, name: providerId === 'google' ? 'Gemini' : providerId === 'claude' ? 'Claude' : 'ChatGPT', cfg };
+  }
+  /* Fallback: first enabled */
+  const enabled = getEnabledAIProviders();
+  return enabled.length ? enabled[0] : null;
+}
+
+/* ---------- 3. UNIFIED AI CALLER ---------- */
+window.callAI = async function(provider, prompt, options) {
+  options = options || {};
+  const maxTokens = options.maxTokens || 1500;
+  const image = options.image; /* { mime, base64 } */
+  
+  if (!provider || !provider.cfg || !provider.cfg.key) {
+    throw new Error('No API key configured for provider');
+  }
+  
+  const cfg = provider.cfg;
+  
+  if (provider.id === 'google') {
+    /* Gemini — use 1.5-flash by default (stable, fast, free tier) */
+    let modelRaw = cfg.model || 'gemini-1.5-flash';
+    /* Normalize common names */
+    let model = modelRaw.toLowerCase().trim().replace(/\s+/g, '-');
+    if (!model.startsWith('gemini')) model = 'gemini-1.5-flash';
+    /* Strip any common bad suffixes */
+    model = model.replace(/-(stable|latest|prod)$/, '');
+    
+    const url = 'https://generativelanguage.googleapis.com/v1beta/models/' + encodeURIComponent(model) + ':generateContent?key=' + encodeURIComponent(cfg.key);
+    
+    const parts = [{ text: prompt }];
+    if (image && image.base64) {
+      parts.unshift({ inline_data: { mime_type: image.mime || 'image/jpeg', data: image.base64 } });
+    }
+    
+    const r = await fetch(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        contents: [{ parts: parts }],
+        generationConfig: { maxOutputTokens: maxTokens }
+      })
+    });
+    
+    const responseText = await r.text();
+    if (!r.ok) {
+      throw new Error('Gemini ' + r.status + ': ' + responseText.slice(0, 400));
+    }
+    
+    let data;
+    try { data = JSON.parse(responseText); }
+    catch(e) { throw new Error('Gemini returned non-JSON: ' + responseText.slice(0, 200)); }
+    
+    const text = data.candidates?.[0]?.content?.parts?.[0]?.text;
+    if (!text) {
+      const blockReason = data.candidates?.[0]?.finishReason;
+      const safetyBlock = data.promptFeedback?.blockReason;
+      throw new Error('Gemini empty response. Block: ' + (blockReason || safetyBlock || 'unknown') + '. Raw: ' + JSON.stringify(data).slice(0, 300));
+    }
+    return text.trim();
+  }
+  
+  if (provider.id === 'claude') {
+    const modelMap = {
+      'Claude Sonnet': 'claude-sonnet-4-5-20250929',
+      'Claude Opus': 'claude-opus-4-1-20250805',
+      'Claude Haiku': 'claude-haiku-4-5-20251001'
+    };
+    const actualModel = modelMap[cfg.model] || cfg.model || 'claude-sonnet-4-5-20250929';
+    
+    const content = [];
+    if (image && image.base64) {
+      content.push({ type: 'image', source: { type: 'base64', media_type: image.mime || 'image/jpeg', data: image.base64 } });
+    }
+    content.push({ type: 'text', text: prompt });
+    
+    const r = await fetch('https://api.anthropic.com/v1/messages', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'x-api-key': cfg.key,
+        'anthropic-version': '2023-06-01',
+        'anthropic-dangerous-direct-browser-access': 'true'
+      },
+      body: JSON.stringify({
+        model: actualModel,
+        max_tokens: maxTokens,
+        messages: [{ role: 'user', content: content }]
+      })
+    });
+    
+    const responseText = await r.text();
+    if (!r.ok) throw new Error('Claude ' + r.status + ': ' + responseText.slice(0, 400));
+    
+    let data;
+    try { data = JSON.parse(responseText); }
+    catch(e) { throw new Error('Claude returned non-JSON: ' + responseText.slice(0, 200)); }
+    
+    const text = data.content?.[0]?.text;
+    if (!text) throw new Error('Claude empty response: ' + JSON.stringify(data).slice(0, 300));
+    return text.trim();
+  }
+  
+  if (provider.id === 'chatgpt') {
+    const modelMap = { 'GPT-5.5 Thinking': 'gpt-4o', 'GPT-4o': 'gpt-4o', 'GPT-4o mini': 'gpt-4o-mini' };
+    const actualModel = modelMap[cfg.model] || (cfg.model && cfg.model.toLowerCase().startsWith('gpt-') ? cfg.model.toLowerCase() : 'gpt-4o-mini');
+    
+    const messages = [];
+    if (image && image.base64) {
+      messages.push({
+        role: 'user',
+        content: [
+          { type: 'text', text: prompt },
+          { type: 'image_url', image_url: { url: 'data:' + (image.mime || 'image/jpeg') + ';base64,' + image.base64 } }
+        ]
+      });
+    } else {
+      messages.push({ role: 'user', content: prompt });
+    }
+    
+    const r = await fetch('https://api.openai.com/v1/chat/completions', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + cfg.key },
+      body: JSON.stringify({ model: actualModel, max_tokens: maxTokens, messages: messages })
+    });
+    
+    const responseText = await r.text();
+    if (!r.ok) throw new Error('OpenAI ' + r.status + ': ' + responseText.slice(0, 400));
+    
+    let data;
+    try { data = JSON.parse(responseText); }
+    catch(e) { throw new Error('OpenAI returned non-JSON: ' + responseText.slice(0, 200)); }
+    
+    const text = data.choices?.[0]?.message?.content;
+    if (!text) throw new Error('OpenAI empty response: ' + JSON.stringify(data).slice(0, 300));
+    return text.trim();
+  }
+  
+  throw new Error('Unknown provider: ' + provider.id);
+};
+
+/* ---------- 4. AI TEST DIAGNOSTIC ---------- */
+window.runAITest = async function() {
+  const enabled = getEnabledAIProviders();
+  const ai = (PROJECT.settings && PROJECT.settings.ai) || {};
+  
+  let report = '=== AI DIAGNOSTIC TEST ===\n\n';
+  report += 'Configured providers in PROJECT.settings.ai:\n';
+  ['google', 'claude', 'chatgpt'].forEach(id => {
+    const p = ai[id] || {};
+    report += '  ' + id + ': ';
+    if (p.key && p.key.length > 10) {
+      report += 'KEY SET (length ' + p.key.length + ', last 4: ...' + p.key.slice(-4) + ')';
+      if (p.model) report += ', model: ' + p.model;
+      report += '\n';
+    } else {
+      report += 'no key\n';
+    }
+  });
+  report += '\nRouting (where each feature looks):\n';
+  const routing = ai.routing || {};
+  Object.keys(routing).forEach(k => { report += '  ' + k + ': ' + routing[k] + '\n'; });
+  const featureRouting = ai.featureRouting || {};
+  Object.keys(featureRouting).forEach(k => { report += '  feature.' + k + ': ' + featureRouting[k] + '\n'; });
+  
+  report += '\nEnabled providers (key length > 10): ' + enabled.length + '\n';
+  report += '\n=== LIVE TEST ===\n\n';
+  
+  if (!enabled.length) {
+    report += '❌ No providers with API keys. Add a key in Settings → AI Providers section.\n\nFor Gemini: visit https://aistudio.google.com/apikey and paste the key.';
+    return report;
+  }
+  
+  for (const p of enabled) {
+    report += 'Testing ' + p.name + ' (' + p.id + ')...\n';
+    try {
+      const result = await callAI(p, 'Respond with exactly two words: "AI works"', { maxTokens: 50 });
+      report += '  ✓ SUCCESS — response: ' + result.slice(0, 200) + '\n\n';
+    } catch (err) {
+      report += '  ✗ FAILED — ' + err.message + '\n\n';
+    }
+  }
+  
+  return report;
+};
+
+window.openAITestDialog = async function() {
+  const dialog = document.createElement('div');
+  dialog.id = 'aiTestDialog';
+  dialog.style.cssText = 'position:fixed;top:0;left:0;right:0;bottom:0;background:rgba(0,0,0,.8);z-index:99999;display:flex;align-items:center;justify-content:center;padding:20px;';
+  dialog.innerHTML = '<div style="background:#fff;border-radius:12px;max-width:600px;width:100%;max-height:80vh;display:flex;flex-direction:column"><div style="padding:14px 18px;background:#0D1B2A;color:#fff;border-radius:12px 12px 0 0;display:flex;align-items:center;gap:10px"><strong style="flex:1">🔍 AI Diagnostic</strong><button onclick="document.body.removeChild(document.getElementById(\'aiTestDialog\'))" style="background:transparent;color:#fff;border:1px solid rgba(255,255,255,.3);border-radius:6px;padding:4px 10px;cursor:pointer">Close</button></div><pre id="aiTestOutput" style="flex:1;overflow:auto;padding:18px;margin:0;font-family:monospace;font-size:11px;line-height:1.5;background:#0f172a;color:#86efac;border-radius:0 0 12px 12px;white-space:pre-wrap;word-break:break-word">Running tests...</pre></div>';
+  document.body.appendChild(dialog);
+  
+  try {
+    const result = await runAITest();
+    const out = document.getElementById('aiTestOutput');
+    if (out) out.textContent = result;
+  } catch (err) {
+    const out = document.getElementById('aiTestOutput');
+    if (out) out.textContent = 'Test runner error: ' + err.message;
+  }
+};
+
+/* ---------- 5. INJECT TEST BUTTON INTO SETTINGS (desktop + mobile) ---------- */
+(function injectAITestButton() {
+  const inject = function() {
+    /* Desktop — find the settings page */
+    if (typeof renderSettings === 'function') {
+      const orig = window.renderSettings;
+      window.renderSettings = function() {
+        let html = orig.apply(this, arguments);
+        const btn = '<div style="margin:18px 0;padding:14px;background:#fff7ed;border-radius:8px;border-left:4px solid #F05A28"><h4 style="margin:0 0 8px">🔍 AI Diagnostic</h4><p class="mini muted" style="margin:0 0 8px">Verify your AI keys are working. This sends a tiny test message to each configured provider and shows the result.</p><button class="btn primary" onclick="openAITestDialog()">🔍 Test AI Connection</button></div>';
+        /* Inject before closing card */
+        return html.replace(/<\/div><\/div>\s*$/, btn + '</div></div>');
+      };
+    }
+  };
+  inject();
+})();
+
+/* Also inject into mobile Setup tab */
+(function injectMobileAITest() {
+  const orig = window.renderMobileSetup;
+  if (typeof orig !== 'function') return;
+  window.renderMobileSetup = function() {
+    let html = orig.apply(this, arguments);
+    const block = '<div class="mb-item-card" style="border-left-color:#F05A28"><div class="mb-item-cat">🔍 AI Diagnostic</div><div style="font-size:13px;color:#475569;margin-bottom:8px">Test your AI keys. Sends a small test message to each configured provider and reports the result.</div><button class="mb-detail-btn primary" style="width:100%" onclick="openAITestDialog()">🔍 Test AI Connection</button></div>';
+    return html + block;
+  };
+})();
+
+/* ---------- 6. PER-FEATURE AI ROUTING UI ---------- */
+window.mbOpenAIRouting = function() {
+  const ai = (PROJECT.settings && PROJECT.settings.ai) || {};
+  if (!PROJECT.settings) PROJECT.settings = {};
+  if (!PROJECT.settings.ai) PROJECT.settings.ai = {};
+  if (!PROJECT.settings.ai.featureRouting) PROJECT.settings.ai.featureRouting = {};
+  
+  const fr = PROJECT.settings.ai.featureRouting;
+  
+  const opt = (val) => '<option value="google" ' + (val==='google'?'selected':'') + '>Gemini</option><option value="claude" ' + (val==='claude'?'selected':'') + '>Claude</option><option value="chatgpt" ' + (val==='chatgpt'?'selected':'') + '>ChatGPT</option>';
+  
+  mbBottomSheet('AI Routing — Per Feature',
+    '<p style="font-size:12px;color:#64748b;margin-bottom:14px">Pick a different AI provider for each feature, or leave on the default.</p>' +
+    '<span class="mb-detail-label">Defect Writing (rewrite notes professionally)</span>' +
+    '<select id="frDefect" class="mb-detail-input" style="font-size:16px">' + opt(fr.defectWriting || 'google') + '</select>' +
+    '<span class="mb-detail-label">Image Scanning (analyse photos)</span>' +
+    '<select id="frImage" class="mb-detail-input" style="font-size:16px">' + opt(fr.imageScan || 'google') + '</select>' +
+    '<span class="mb-detail-label">Mentor Chat</span>' +
+    '<select id="frChat" class="mb-detail-input" style="font-size:16px">' + opt(fr.mentorChat || 'google') + '</select>' +
+    '<span class="mb-detail-label">Document Assessment</span>' +
+    '<select id="frDoc" class="mb-detail-input" style="font-size:16px">' + opt(fr.documents || 'google') + '</select>' +
+    '<div class="mb-detail-actions" style="margin-top:18px">' +
+      '<button class="mb-detail-btn" onclick="mbCloseSheet()">Cancel</button>' +
+      '<button class="mb-detail-btn primary" onclick="mbSaveAIRouting()">✓ Save</button>' +
+    '</div>'
+  );
+};
+
+window.mbSaveAIRouting = function() {
+  if (!PROJECT.settings) PROJECT.settings = {};
+  if (!PROJECT.settings.ai) PROJECT.settings.ai = {};
+  if (!PROJECT.settings.ai.featureRouting) PROJECT.settings.ai.featureRouting = {};
+  PROJECT.settings.ai.featureRouting.defectWriting = document.getElementById('frDefect').value;
+  PROJECT.settings.ai.featureRouting.imageScan = document.getElementById('frImage').value;
+  PROJECT.settings.ai.featureRouting.mentorChat = document.getElementById('frChat').value;
+  PROJECT.settings.ai.featureRouting.documents = document.getElementById('frDoc').value;
+  if (typeof saveProject === 'function') saveProject(true);
+  mbCloseSheet();
+  haptic([10, 30, 10]);
+  showToast('✓ Routing saved', 'ok');
+};
+
+/* Add to mobile Setup */
+(function addRoutingToSetup() {
+  const orig = window.renderMobileSetup;
+  if (typeof orig !== 'function') return;
+  window.renderMobileSetup = function() {
+    let html = orig.apply(this, arguments);
+    const block = '<div class="mb-item-card" style="border-left-color:#0D1B2A"><div class="mb-item-cat">🤖 AI per-feature routing</div><div style="font-size:13px;color:#475569;margin-bottom:8px">Choose which AI handles each task — defect writing, image scanning, chat, documents.</div><button class="mb-detail-btn primary" style="width:100%" onclick="mbOpenAIRouting()">⚙ Configure AI routing</button></div>';
+    return html + block;
+  };
+})();
+
+/* ---------- 7. REAL Documents+AI runAIonUpload (desktop) ---------- */
+window.runAIonUpload = async function(i) {
+  const d = PROJECT.uploadedDocs && PROJECT.uploadedDocs[i];
+  if (!d) { alert('Document not found'); return; }
+  
+  const featureProvider = d.aiModel || PROJECT.settings?.ai?.featureRouting?.documents || 'google';
+  let providerId = featureProvider;
+  if (typeof featureProvider === 'string') {
+    const n = featureProvider.toLowerCase();
+    if (n.includes('gemini') || n === 'google') providerId = 'google';
+    else if (n.includes('claude')) providerId = 'claude';
+    else if (n.includes('gpt') || n.includes('chat')) providerId = 'chatgpt';
+  }
+  const ai = PROJECT.settings?.ai || {};
+  const cfg = ai[providerId];
+  
+  if (!cfg || !cfg.key) {
+    alert('No API key for ' + providerId + '. Add it in Settings → AI Providers, or run "Test AI Connection" in Settings to diagnose.');
+    return;
+  }
+  
+  const provider = { id: providerId, name: providerId === 'google' ? 'Gemini' : providerId === 'claude' ? 'Claude' : 'ChatGPT', cfg };
+  
+  d.aiOutcome = 'Working...';
+  d.aiNotes = '🤖 Analysing with ' + provider.name + '...';
+  renderPages();
+  goTab(3);
+  
+  const c = PROJECT.client || {};
+  
+  const prompt = 'You are a Victorian building consultant AI. Assess this document for a building permit application.\n\n' +
+    'PROJECT CONTEXT:\n' +
+    '• Client: ' + (c.name || 'unset') + '\n' +
+    '• Address: ' + (c.address || 'unset') + '\n' +
+    '• Class: ' + (c.class || 'unset') + '\n' +
+    '• Work type: ' + (c.workType || 'unset') + '\n' +
+    '• Council: ' + (c.council || 'unset') + '\n' +
+    '• Project cost: $' + ((parseFloat(c.projectCost) || 0)).toLocaleString() + '\n\n' +
+    'DOCUMENT TYPE: ' + (d.docType || 'unspecified') + '\n' +
+    'DOCUMENT NAME: ' + (d.label || d.fileName || 'unnamed') + '\n\n' +
+    'Provide a structured assessment covering:\n' +
+    '1. Summary of what this document is\n' +
+    '2. Compliance with NCC (with clause references where applicable)\n' +
+    '3. Compliance with Australian Standards (cite the standards)\n' +
+    '4. Compliance with Building Regulations 2018 if applicable\n' +
+    '5. Missing information that would trigger an RFI\n' +
+    '6. Inconsistencies vs the project context\n' +
+    '7. Specific recommendations\n' +
+    '8. Suggested outcome (Passed / RFI / Failed)\n\n' +
+    'Format output as plain text with section numbers. Be concise but thorough. End with "OUTCOME: Passed" or "OUTCOME: RFI" or "OUTCOME: Failed".';
+  
+  try {
+    /* If we have file content (base64), include it */
+    let imageOpt = null;
+    if (d.fileData && d.fileType && (d.fileType.startsWith('image/') || (providerId === 'google' && d.fileType === 'application/pdf'))) {
+      const base64 = d.fileData.split(',')[1] || d.fileData;
+      imageOpt = { mime: d.fileType, base64: base64 };
+    }
+    
+    const result = await callAI(provider, prompt, { maxTokens: 2500, image: imageOpt });
+    
+    /* Parse outcome */
+    let outcome = 'Passed';
+    if (result.match(/OUTCOME:\s*RFI/i)) outcome = 'RFI';
+    else if (result.match(/OUTCOME:\s*Failed/i)) outcome = 'Failed';
+    
+    d.aiOutcome = outcome;
+    d.aiNotes = '🤖 AI assessment by ' + provider.name + ':\n\n' + result;
+  } catch (err) {
+    console.error('Doc AI error:', err);
+    d.aiOutcome = 'Error';
+    d.aiNotes = '❌ AI assessment failed:\n\n' + err.message + '\n\nTo diagnose: Settings → "Test AI Connection".\n\nCommon causes:\n• API key invalid or expired\n• Wrong model name (e.g. "Gemini 2.5 Pro" when you mean "gemini-1.5-flash")\n• API key not enabled for the model\n• Rate limit reached';
+  }
+  
+  if (typeof saveProject === 'function') saveProject(true);
+  renderPages();
+  goTab(3);
+};
+
+/* Wire file content capture during upload */
+(function captureFileData() {
+  const orig = window.handleDocUpload;
+  if (typeof orig !== 'function') return;
+  window.handleDocUpload = function(e) {
+    const files = Array.from(e.target.files || []);
+    const baseRouting = PROJECT.settings?.ai?.routing?.documents || 'google';
+    files.forEach(f => {
       const reader = new FileReader();
-      reader.onload = ev => {
-        const img = new Image();
-        img.onload = function() {
-          try {
-            const maxDim = 1400;
-            let w = img.width, h = img.height;
-            if (w > maxDim || h > maxDim) {
-              if (w > h) { h = h * maxDim / w; w = maxDim; }
-              else { w = w * maxDim / h; h = maxDim; }
-            }
-            const canvas = document.createElement('canvas');
-            canvas.width = Math.round(w);
-            canvas.height = Math.round(h);
-            canvas.getContext('2d').drawImage(img, 0, 0, w, h);
-            const photo = {
-              id: 'ph_' + Date.now().toString(36) + Math.random().toString(36).slice(2,5),
-              data: canvas.toDataURL('image/jpeg', 0.82),
-              caption: '',
-              ts: Date.now()
-            };
-            const key = collection === 'site' ? 'sitePhotos' : 'limitationsPhotos';
-            PROJECT[key] = PROJECT[key] || [];
-            PROJECT[key].push(photo);
-          } catch(err) { console.warn(err); }
-          pending--;
-          if (pending === 0) {
-            if (typeof saveProject === 'function') saveProject(true);
-            haptic([10,30,10]);
-            showToast('✓ ' + files.length + ' photo(s) added', 'ok');
-            renderMobilePage();
-          }
-        };
-        img.src = ev.target.result;
+      reader.onload = (ev) => {
+        if (!PROJECT.uploadedDocs) PROJECT.uploadedDocs = [];
+        PROJECT.uploadedDocs.push({
+          fileName: f.name,
+          label: f.name.replace(/\.[^.]+$/, ''),
+          size: (f.size / 1024).toFixed(0) + ' KB',
+          docType: '',
+          docDate: '',
+          targetSection: '',
+          aiModel: baseRouting,
+          aiOutcome: '',
+          aiNotes: '',
+          fileType: f.type,
+          fileData: ev.target.result
+        });
+        renderPages(); goTab(3);
       };
       reader.readAsDataURL(f);
     });
   };
-  input.click();
-};
+})();
 
-window.mbDeletePhoto = function(collection, idx) {
-  if (!confirm('Delete this photo?')) return;
-  const key = collection === 'site' ? 'sitePhotos' : 'limitationsPhotos';
-  PROJECT[key].splice(idx, 1);
-  if (typeof saveProject === 'function') saveProject(true);
+/* ---------- 8. AI DEFECT REWRITE — fix and enhance ---------- */
+window.mbAIRewriteDefect = async function(itemKey) {
   haptic(8);
-  renderMobilePage();
-};
-
-window.mbEditPhotoCaption = function(collection, idx) {
-  const key = collection === 'site' ? 'sitePhotos' : 'limitationsPhotos';
-  const photo = PROJECT[key][idx];
-  if (!photo) return;
-  const cap = prompt('Caption for this photo:', photo.caption || '');
-  if (cap === null) return;
-  photo.caption = cap;
-  if (typeof saveProject === 'function') saveProject(true);
-  renderMobilePage();
-};
-
-window.mbSetAsMainPhoto = function(collection, idx) {
-  const key = collection === 'site' ? 'sitePhotos' : 'limitationsPhotos';
-  const photo = PROJECT[key][idx];
-  if (!photo) return;
-  PROJECT.propertyPhoto = photo.data;
-  if (typeof saveProject === 'function') saveProject(true);
-  haptic([10,30,10]);
-  showToast('✓ Set as main property photo', 'ok');
-  renderMobilePage();
-};
-
-/* Photo collection card renderer */
-function renderPhotoCollectionCard(title, collection, description, accentColor) {
-  const key = collection === 'site' ? 'sitePhotos' : 'limitationsPhotos';
-  const photos = PROJECT[key] || [];
-  let html = '<div style="background:#fff;border-radius:12px;padding:14px 16px;margin-bottom:10px;box-shadow:0 1px 3px rgba(0,0,0,.05);border-left:4px solid ' + accentColor + '">';
-  html += '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">';
-  html += '<h3 style="margin:0;font-size:13px;text-transform:uppercase;letter-spacing:1px;color:#0D1B2A;font-weight:700">' + esc(title) + '</h3>';
-  html += '<button onclick="mbUploadGeneralPhoto(\'' + collection + '\')" style="background:' + accentColor + ';color:#fff;border:none;border-radius:6px;padding:6px 12px;font-size:12px;font-weight:600;cursor:pointer">+ Add</button>';
-  html += '</div>';
-  html += '<p style="font-size:11px;color:#64748b;margin:0 0 10px">' + esc(description) + '</p>';
-  if (!photos.length) {
-    html += '<div style="text-align:center;padding:20px;color:#94a3b8;background:#f6f8fa;border-radius:8px;font-size:12px">No photos yet</div>';
-  } else {
-    html += '<div style="display:grid;grid-template-columns:repeat(3,1fr);gap:6px">';
-    photos.forEach((p, i) => {
-      html += '<div style="position:relative;aspect-ratio:1;background:#000;border-radius:6px;overflow:hidden">';
-      html += '<img src="' + p.data + '" style="width:100%;height:100%;object-fit:cover;display:block" onclick="mbEditPhotoCaption(\'' + collection + '\',' + i + ')">';
-      html += '<button onclick="event.stopPropagation();mbDeletePhoto(\'' + collection + '\',' + i + ')" style="position:absolute;top:4px;right:4px;background:rgba(220,38,38,.9);color:#fff;border:none;border-radius:50%;width:22px;height:22px;cursor:pointer;font-size:11px">×</button>';
-      if (collection === 'site') {
-        html += '<button onclick="event.stopPropagation();mbSetAsMainPhoto(\'' + collection + '\',' + i + ')" style="position:absolute;bottom:4px;left:4px;background:rgba(13,27,42,.85);color:#fff;border:none;border-radius:4px;padding:2px 6px;cursor:pointer;font-size:9px">⭐ Main</button>';
-      }
-      if (p.caption) {
-        html += '<div style="position:absolute;bottom:0;left:0;right:0;background:linear-gradient(transparent,rgba(0,0,0,.7));color:#fff;padding:14px 4px 3px;font-size:9px;text-align:center;line-height:1.2">' + esc(p.caption.slice(0,30)) + '</div>';
-      }
-      html += '</div>';
-    });
-    html += '</div>';
+  const cur = PROJECT.inspections.currentType;
+  const v = (PROJECT.inspections[cur] && PROJECT.inspections[cur][itemKey]) || {};
+  
+  /* Get the note text from the input or stored value */
+  const noteField = document.getElementById('note_' + itemKey);
+  const userText = (noteField ? noteField.value : '') || v.notes || '';
+  
+  if (!userText.trim()) {
+    showToast('Type or speak a note first, then tap AI to rewrite it', 'warn');
+    if (noteField) noteField.focus();
+    return;
   }
-  html += '</div>';
-  return html;
-}
+  
+  const provider = getProviderForFeature('defectWriting');
+  if (!provider) {
+    showToast('No AI configured. Setup tab → "Test AI Connection" to diagnose.', 'err');
+    return;
+  }
+  
+  showToast('🤖 ' + provider.name + ' rewriting...', 'ok');
+  
+  const insp = INSPECTION_TYPES.find(t => t.id === cur);
+  const inspType = insp ? insp.name : 'building inspection';
+  
+  const prompt = 'You are an Australian building inspector working on a ' + inspType + '.\n\n' +
+    'Inspector observation:\n"' + userText + '"\n\n' +
+    'Rewrite this as a professional inspection defect entry. Format:\n' +
+    '[OBSERVATION: factual description of what is observed, with extent/measurement if possible]. ' +
+    'Reference: [most relevant Australian Standard or NCC clause]. ' +
+    '[IMPLICATION using "may indicate" or "consistent with" — never claim definite causation]. ' +
+    'Recommendation: [specific specialist or trade] to [purpose].\n\n' +
+    'Rules:\n' +
+    '• 200-400 characters total\n' +
+    '• Use "observed" pattern — never "is", "has", "was caused by"\n' +
+    '• No absolutes (always, never, will, definitely)\n' +
+    '• Recommend specialist assessment, not specific rectification methods\n' +
+    '• Australian English\n' +
+    '• Output ONLY the rewritten defect text — no preamble, no commentary, no quotes.';
+  
+  try {
+    const result = await callAI(provider, prompt, { maxTokens: 600 });
+    
+    /* Show in preview sheet */
+    const safeKey = itemKey.replace(/'/g, "\\'");
+    const safeOriginal = userText.replace(/'/g, "\\'");
+    
+    mbBottomSheet('AI Rewrite — ' + provider.name,
+      '<p class="mini muted" style="margin-bottom:10px;font-size:11px">Edit if needed, then accept to replace your note.</p>' +
+      '<div style="background:#f6f8fa;padding:10px;border-radius:8px;margin-bottom:10px"><strong style="font-size:10px;text-transform:uppercase;color:#64748b">Your original:</strong><br><span style="font-size:12px">' + esc(userText.slice(0, 200)) + (userText.length > 200 ? '…' : '') + '</span></div>' +
+      '<textarea id="aiRewriteResult" class="mb-detail-input" rows="6" style="font-size:16px">' + esc(result) + '</textarea>' +
+      '<div class="mb-detail-actions" style="margin-top:14px">' +
+        '<button class="mb-detail-btn" onclick="mbCloseSheet()">Cancel</button>' +
+        '<button class="mb-detail-btn primary" onclick="mbAcceptAIRewrite(\'' + safeKey + '\')">✓ Replace</button>' +
+      '</div>' +
+      '<button class="mb-detail-btn" style="width:100%;margin-top:6px;background:#fff7ed;color:#F05A28" onclick="mbCloseSheet();setTimeout(()=>{mbAIRewriteDefect(\'' + safeKey + '\')},100)">🔄 Try again</button>'
+    );
+    haptic([10, 30, 10]);
+  } catch (err) {
+    console.error('AI rewrite failed:', err);
+    showToast('AI failed: ' + err.message.slice(0, 80), 'err');
+    /* Show full error in a sheet so they can read it */
+    mbBottomSheet('AI Error',
+      '<p style="color:#dc2626;font-weight:600">The AI call failed:</p>' +
+      '<pre style="background:#1f2937;color:#fecaca;padding:10px;border-radius:6px;font-size:11px;white-space:pre-wrap;word-break:break-word;max-height:200px;overflow:auto">' + esc(err.message) + '</pre>' +
+      '<p class="mini muted" style="margin-top:10px">Tap Setup tab → "Test AI Connection" to diagnose.</p>' +
+      '<button class="mb-detail-btn primary" style="width:100%;margin-top:10px" onclick="mbCloseSheet()">OK</button>'
+    );
+  }
+};
 
-/* ---------- 6. ADD PHOTO COLLECTIONS TO DASHBOARD ---------- */
-(function injectPhotoCollections() {
-  const orig = window.renderJobDashboard;
-  if (typeof orig !== 'function') return;
-  window.renderJobDashboard = function() {
-    let html = orig();
-    
-    /* Inject photo collections before the General Notes section */
-    const photoHtml = 
-      '<h3 style="margin:20px 0 8px;font-size:13px;text-transform:uppercase;letter-spacing:1px;color:#0D1B2A;font-weight:700">📷 Photo Collections</h3>' +
-      renderPhotoCollectionCard('Site Photos', 'site', 'General property and site context shots, not tied to any specific defect.', '#0D1B2A') +
-      renderPhotoCollectionCard('Obstructions & Limitations', 'limitations', 'Evidence of areas that could not be inspected — locked rooms, stored items, no access, weather. These appear in the Limitations section of the report.', '#dc2626');
-    
-    /* Insert before General Notes */
-    html = html.replace(/(<div[^>]*>\s*<div[^>]*display:flex[^>]*>\s*<h3[^>]*>📋 General Notes)/, photoHtml + '$1');
-    
-    return html;
-  };
-})();
-
-/* ---------- 7. DEFECT / FREE-FORM REORDERING ---------- */
-window.mbMoveFreeForm = function(idx, dir) {
-  const list = PROJECT.freeFormObservations || [];
-  const newIdx = idx + dir;
-  if (newIdx < 0 || newIdx >= list.length) return;
-  const item = list.splice(idx, 1)[0];
-  list.splice(newIdx, 0, item);
+window.mbAcceptAIRewrite = function(itemKey) {
+  const ta = document.getElementById('aiRewriteResult');
+  if (!ta) return;
+  const cur = PROJECT.inspections.currentType;
+  if (!PROJECT.inspections[cur]) PROJECT.inspections[cur] = {};
+  if (!PROJECT.inspections[cur][itemKey]) PROJECT.inspections[cur][itemKey] = {};
+  PROJECT.inspections[cur][itemKey].notes = ta.value;
   if (typeof saveProject === 'function') saveProject(true);
-  haptic(8);
+  mbCloseSheet();
+  haptic([10, 30, 10]);
+  showToast('✓ Defect updated', 'ok');
   renderMobilePage();
 };
 
-/* Inject reorder buttons into renderMobileActions */
-(function enhanceActionsReorder() {
-  const orig = window.renderMobileActions;
-  if (typeof orig !== 'function') return;
-  window.renderMobileActions = function() {
-    let html = orig();
-    /* Add reorder controls to each free-form card */
-    /* The card structure has buttons "View" and "Delete" — we add Up/Down before them */
-    const freeForm = PROJECT.freeFormObservations || [];
-    if (!freeForm.length) return html;
-    
-    /* Re-render Quick Observations section with reorder controls */
-    let secStart = html.indexOf('Quick Observations (');
-    if (secStart < 0) return html;
-    /* Find the h2 element */
-    let h2Start = html.lastIndexOf('<h2', secStart);
-    if (h2Start < 0) return html;
-    
-    /* Rebuild this entire section */
-    let newSec = '<h2 style="color:#0D1B2A;font-family:\'Barlow Condensed\';text-transform:uppercase;letter-spacing:1px;margin:14px 0 8px">Quick Observations (' + freeForm.length + ')</h2>';
-    freeForm.slice().reverse().forEach(function(obs, revI) {
-      const i = freeForm.length - 1 - revI;
-      const sevColor = obs.severity >= 5 ? '#dc2626' : obs.severity >= 4 ? '#ea580c' : obs.severity >= 3 ? '#d97706' : obs.severity >= 2 ? '#65a30d' : '#6b7280';
-      newSec += '<div class="mb-item-card" style="border-left-color:' + sevColor + '">' +
-        '<div class="mb-item-cat">📍 ' + esc(obs.location) + ' · ' + new Date(obs.timestamp).toLocaleDateString('en-AU') + '</div>' +
-        '<div class="mb-item-title">' + esc(obs.description.slice(0, 200)) + (obs.description.length > 200 ? '…' : '') + '</div>' +
-        '<div class="mb-card-chips">' +
-          '<span class="mb-chip" style="background:' + sevColor + ';color:#fff">⬤ Sev ' + obs.severity + '</span>' +
-          (obs.photos && obs.photos.length ? '<span class="mb-chip">📷 ' + obs.photos.length + '</span>' : '') +
-          (obs.aiGenerated ? '<span class="mb-chip" style="background:#10b981;color:#fff">🤖 AI</span>' : '') +
-        '</div>' +
-        '<div style="display:flex;gap:4px;margin-top:8px;align-items:center">' +
-          '<button class="mb-detail-btn" style="padding:8px;width:38px;flex:0 0 auto" onclick="mbMoveFreeForm(' + i + ',-1)" ' + (i === 0 ? 'disabled style="opacity:.3"' : '') + '>▲</button>' +
-          '<button class="mb-detail-btn" style="padding:8px;width:38px;flex:0 0 auto" onclick="mbMoveFreeForm(' + i + ',1)" ' + (i === freeForm.length - 1 ? 'disabled style="opacity:.3"' : '') + '>▼</button>' +
-          '<button class="mb-detail-btn" style="flex:1" onclick="mbViewFreeForm(' + i + ')">View</button>' +
-          '<button class="mb-detail-btn" style="background:#fee2e2;color:#991b1b" onclick="mbDeleteFreeForm(' + i + ')">✕</button>' +
-        '</div>' +
-      '</div>';
+/* ---------- 9. AI PHOTO SCANNING ---------- */
+window.mbAIScanPhoto = async function(itemKey, photoIdx) {
+  haptic(8);
+  const cur = PROJECT.inspections.currentType;
+  const v = (PROJECT.inspections[cur] && PROJECT.inspections[cur][itemKey]) || {};
+  const photo = v.photos && v.photos[photoIdx];
+  
+  if (!photo || !photo.data) { showToast('No photo to analyse', 'err'); return; }
+  
+  const provider = getProviderForFeature('imageScan');
+  if (!provider) {
+    showToast('No AI configured. Setup tab → "Test AI Connection".', 'err');
+    return;
+  }
+  
+  /* Both Gemini and Claude support vision. ChatGPT does too via gpt-4o */
+  showToast('🔍 ' + provider.name + ' analysing photo...', 'ok');
+  
+  const insp = INSPECTION_TYPES.find(t => t.id === cur);
+  const inspType = insp ? insp.name : 'building inspection';
+  
+  const prompt = 'You are an Australian building inspector working on a ' + inspType + '.\n\n' +
+    'Analyse this photo from the inspection. Identify any defects, hazards, or compliance issues visible.\n\n' +
+    'Provide a structured response:\n\n' +
+    'WHAT IS SHOWN: [brief 1-sentence description of what the photo shows]\n\n' +
+    'DEFECTS IDENTIFIED:\n• [list each defect with its location in the image — top-left, etc.]\n\n' +
+    'SEVERITY: [1-5, where 5 = urgent safety, 4 = major, 3 = moderate, 2 = minor, 1 = cosmetic]\n\n' +
+    'RELEVANT STANDARD: [Australian Standard or NCC reference if applicable]\n\n' +
+    'SUGGESTED DEFECT WORDING (200-400 chars, Australian English, liability-safe with "observed" pattern, no absolutes, recommend specialist):\n[wording here]\n\n' +
+    'Be honest if the photo is unclear, dark, or shows nothing of inspection concern. Do not invent defects.';
+  
+  const base64 = photo.data.split(',')[1] || photo.data;
+  const mime = photo.data.match(/^data:([^;]+)/)?.[1] || 'image/jpeg';
+  
+  try {
+    const result = await callAI(provider, prompt, {
+      maxTokens: 1200,
+      image: { mime: mime, base64: base64 }
     });
     
-    /* Replace existing Quick Observations block */
-    /* Find end of section — assume it goes to end of html or next h2 */
-    let nextH2 = html.indexOf('<h2', h2Start + 5);
-    let endOfSection = nextH2 > 0 ? nextH2 : html.length;
-    return html.slice(0, h2Start) + newSec + html.slice(endOfSection);
-  };
-})();
+    /* Parse the suggested defect wording out of the response */
+    const sugMatch = result.match(/SUGGESTED DEFECT WORDING[^:]*:\s*([\s\S]+?)(?:\n\n|$)/i);
+    const suggested = sugMatch ? sugMatch[1].trim() : '';
+    const sevMatch = result.match(/SEVERITY:\s*(\d)/i);
+    const suggestedSev = sevMatch ? parseInt(sevMatch[1]) : 3;
+    
+    const safeKey = itemKey.replace(/'/g, "\\'");
+    const safeSug = suggested.replace(/'/g, "\\'").replace(/\n/g, '\\n');
+    
+    /* Display result */
+    mbBottomSheet('🔍 AI Photo Analysis — ' + provider.name,
+      '<img src="' + photo.data + '" style="width:100%;border-radius:8px;margin-bottom:12px;max-height:200px;object-fit:contain;background:#000">' +
+      '<div style="background:#f0f9ff;padding:10px;border-radius:8px;margin-bottom:10px;font-size:13px;line-height:1.5;white-space:pre-wrap">' + esc(result) + '</div>' +
+      (suggested ? '<div class="mb-detail-actions" style="margin-top:14px">' +
+        '<button class="mb-detail-btn primary" style="flex:2" onclick="mbApplyPhotoSuggestion(\'' + safeKey + '\', \'' + safeSug + '\', ' + suggestedSev + ')">✓ Use suggested wording</button>' +
+        '<button class="mb-detail-btn" onclick="mbCloseSheet()">Close</button>' +
+      '</div>' : '<button class="mb-detail-btn primary" style="width:100%;margin-top:10px" onclick="mbCloseSheet()">Close</button>')
+    );
+    haptic([10, 30, 10]);
+  } catch (err) {
+    console.error('Image scan failed:', err);
+    mbBottomSheet('AI Error',
+      '<p style="color:#dc2626;font-weight:600">Image analysis failed:</p>' +
+      '<pre style="background:#1f2937;color:#fecaca;padding:10px;border-radius:6px;font-size:11px;white-space:pre-wrap;word-break:break-word;max-height:200px;overflow:auto">' + esc(err.message) + '</pre>' +
+      '<p class="mini muted" style="margin-top:10px">Setup tab → "Test AI Connection" to diagnose.</p>' +
+      '<button class="mb-detail-btn primary" style="width:100%;margin-top:10px" onclick="mbCloseSheet()">OK</button>'
+    );
+  }
+};
 
-console.log('[Phase G] Comprehensive expansion loaded: location relevance, popup off, pool comprehensive, dilapidation expanded, photo collections, defect reorder');
+window.mbApplyPhotoSuggestion = function(itemKey, wording, severity) {
+  const cur = PROJECT.inspections.currentType;
+  if (!PROJECT.inspections[cur]) PROJECT.inspections[cur] = {};
+  if (!PROJECT.inspections[cur][itemKey]) PROJECT.inspections[cur][itemKey] = {};
+  PROJECT.inspections[cur][itemKey].notes = wording.replace(/\\n/g, '\n');
+  PROJECT.inspections[cur][itemKey].severity = severity;
+  PROJECT.inspections[cur][itemKey].status = severity >= 3 ? 'Fail' : (severity >= 2 ? 'Maintenance' : 'Pass');
+  if (typeof saveProject === 'function') saveProject(true);
+  mbCloseSheet();
+  haptic([10, 30, 10]);
+  showToast('✓ Defect updated from photo', 'ok');
+  renderMobilePage();
+};
+
+/* ---------- 10. WIRE INTO ITEM CARD — replace older mbItemAI ---------- */
+window.mbItemAI = function(itemKey) {
+  mbAIRewriteDefect(itemKey);
+};
+
+console.log('[Phase H] AI integration loaded — popup off, real API, diagnostic, per-feature routing, defect rewrite, photo scan');
 
 
 </script>
