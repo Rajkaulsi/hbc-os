@@ -24370,6 +24370,17 @@ window.renderMobileInspectionLibrary = function(typeId, jobInsp) {
   html += '<div style="font-size:10px;color:#64748b">' + esc(lib.standard) + '</div>';
   html += '</div></div>';
   
+  /* Inspection TYPE switcher row — horizontally scrollable pills */
+  html += '<div style="padding:8px 8px 0;overflow-x:auto;white-space:nowrap;-webkit-overflow-scrolling:touch">';
+  Object.keys(window.INSPECTION_LIBRARY).forEach(tid => {
+    if (tid === 'PCI' || tid === 'StageInspections') return; /* skip the redirect stubs */
+    const isCurrent = tid === typeId;
+    const lib2 = window.INSPECTION_LIBRARY[tid];
+    const short = lib2.name.split('—')[0].split('(')[0].trim().split(' ').slice(0,3).join(' ');
+    html += '<button onclick="mbSwitchInspection(\'' + tid + '\')" style="display:inline-block;background:' + (isCurrent ? '#0D1B2A' : '#f3f4f6') + ';color:' + (isCurrent ? '#fff' : '#0D1B2A') + ';border:1.5px solid ' + (isCurrent ? '#0D1B2A' : '#e5e7eb') + ';border-radius:16px;padding:6px 12px;margin-right:6px;font-size:11px;font-weight:700;cursor:pointer">' + esc(short) + '</button>';
+  });
+  html += '</div>';
+  
   /* Comprehensive toggle — prominent, sticky */
   html += '<div style="padding:8px 8px 0;display:flex;align-items:center;gap:8px">';
   html += '<button onclick="toggleComprehensive()" style="flex:1;background:' + (showComp ? '#F05A28' : '#fff') + ';color:' + (showComp ? '#fff' : '#0D1B2A') + ';border:2px solid #F05A28;border-radius:8px;padding:8px;font-size:12px;font-weight:700;cursor:pointer;display:flex;align-items:center;justify-content:center;gap:6px">';
@@ -24408,32 +24419,73 @@ window.renderMobileInspectionLibrary = function(typeId, jobInsp) {
     html += '<button onclick="mbBackToGroups()" style="display:flex;align-items:center;gap:6px;background:#f3f4f6;border:none;border-radius:6px;padding:8px 12px;margin:8px 0;font-size:12px;font-weight:700;color:#64748b;cursor:pointer">← All groups</button>';
     html += '<div style="font-size:11px;color:#64748b;font-weight:700;text-transform:uppercase;letter-spacing:.5px;margin:8px 0">📍 ' + esc(currentGroup) + ' — pick location</div>';
     
-    group.locations.forEach(loc => {
-      const filteredItems = loc.items.filter(it => showComp || it.level === 'std');
+    /* Custom (duplicated) locations: stored on the inspection record under
+       record.customLocations = [{group, sourceLocation, customName}, ...] */
+    const rec = (jobInsp && jobInsp.record) ? jobInsp.record : jobInsp;
+    if (!rec.customLocations) rec.customLocations = [];
+    
+    /* Build a combined list: library locations first, then customs for this group */
+    const renderLocCard = (locDef, displayName, isCustom, customIdx) => {
+      const filteredItems = locDef.items.filter(it => showComp || it.level === 'std');
       const itemCount = filteredItems.length;
-      /* Count completed */
       let completed = 0;
       filteredItems.forEach(it => {
-        const k = currentGroup + '::' + loc.location + '::' + it.key;
+        const k = currentGroup + '::' + displayName + '::' + it.key;
         if (jobInsp.locationItems[k] && jobInsp.locationItems[k].checked) completed++;
       });
       const pct = itemCount > 0 ? Math.round((completed / itemCount) * 100) : 0;
       const stateColor = completed === itemCount && itemCount > 0 ? '#16a34a' : completed > 0 ? '#F05A28' : '#94a3b8';
+      const safe = displayName.replace(/'/g, "\\'");
       
-      html += '<button onclick="mbPickLocation(\'' + loc.location.replace(/'/g,"\\'") + '\')" style="display:flex;align-items:center;gap:12px;width:100%;background:#fff;border:1.5px solid #e5e7eb;border-radius:10px;padding:12px;margin-bottom:8px;cursor:pointer;text-align:left">';
-      html += '<span style="font-size:22px;flex-shrink:0">' + locationIcon(loc.location) + '</span>';
+      html += '<div style="display:flex;gap:6px;margin-bottom:8px">';
+      /* Main location card (click to open) */
+      html += '<button onclick="mbPickLocation(\'' + safe + '\')" style="flex:1;display:flex;align-items:center;gap:12px;background:' + (isCustom ? '#fff8e1' : '#fff') + ';border:1.5px solid ' + (isCustom ? '#fbbf24' : '#e5e7eb') + ';border-radius:10px;padding:12px;cursor:pointer;text-align:left;min-width:0">';
+      html += '<span style="font-size:22px;flex-shrink:0">' + locationIcon(displayName) + '</span>';
       html += '<div style="flex:1;min-width:0">';
-      html += '<div style="font-size:13px;font-weight:700;color:#0D1B2A">' + esc(loc.location) + '</div>';
+      html += '<div style="font-size:13px;font-weight:700;color:#0D1B2A;display:flex;align-items:center;gap:6px">' + esc(displayName);
+      if (isCustom) html += '<span style="background:#fbbf24;color:#78350f;font-size:9px;padding:1px 6px;border-radius:6px;font-weight:800">DUPLICATE</span>';
+      html += '</div>';
       html += '<div style="display:flex;align-items:center;gap:6px;margin-top:4px"><div style="flex:1;height:4px;background:#e5e7eb;border-radius:2px;overflow:hidden"><div style="width:' + pct + '%;height:100%;background:' + stateColor + '"></div></div>';
       html += '<span style="font-size:10px;color:' + stateColor + ';font-weight:700">' + completed + '/' + itemCount + '</span></div></div>';
       html += '<span style="color:#F05A28;font-size:18px">›</span></button>';
+      
+      /* Action buttons column */
+      html += '<div style="display:flex;flex-direction:column;gap:4px">';
+      html += '<button onclick="mbDuplicateLocation(\'' + currentGroup.replace(/'/g,"\\'") + '\', \'' + locDef.location.replace(/'/g,"\\'") + '\')" title="Duplicate this location" style="background:#0D1B2A;color:#fff;border:none;border-radius:6px;width:38px;height:38px;font-size:16px;cursor:pointer;display:flex;align-items:center;justify-content:center">⎘</button>';
+      if (isCustom) {
+        html += '<button onclick="mbDeleteCustomLocation(' + customIdx + ')" title="Delete this duplicate" style="background:#fee2e2;color:#991b1b;border:none;border-radius:6px;width:38px;height:38px;font-size:14px;cursor:pointer;display:flex;align-items:center;justify-content:center;font-weight:700">✕</button>';
+      }
+      html += '</div></div>';
+    };
+    
+    /* Library locations */
+    group.locations.forEach(loc => {
+      renderLocCard(loc, loc.location, false, -1);
+      /* Then any customs that duplicated THIS location */
+      rec.customLocations.forEach((cl, idx) => {
+        if (cl.group === currentGroup && cl.sourceLocation === loc.location) {
+          renderLocCard(loc, cl.customName, true, idx);
+        }
+      });
     });
+    
     html += '</div></div>';
     return html;
   }
   
-  /* Location selected — show ITEMS for that location */
-  const location = group.locations.find(l => l.location === currentLoc);
+  /* Location selected — show ITEMS for that location.
+     Either a library location, or a custom duplicate that maps back to a library source. */
+  const recForItems = (jobInsp && jobInsp.record) ? jobInsp.record : jobInsp;
+  let location = group.locations.find(l => l.location === currentLoc);
+  let displayName = currentLoc;
+  let isCustomDup = false;
+  if (!location && recForItems.customLocations) {
+    const custom = recForItems.customLocations.find(cl => cl.group === currentGroup && cl.customName === currentLoc);
+    if (custom) {
+      location = group.locations.find(l => l.location === custom.sourceLocation);
+      isCustomDup = true;
+    }
+  }
   if (!location) {
     LIBRARY_STATE.currentLocation = null;
     return renderMobileInspectionLibrary(typeId, jobInsp);
@@ -24445,7 +24497,10 @@ window.renderMobileInspectionLibrary = function(typeId, jobInsp) {
   html += '<button onclick="mbBackToLocations()" style="display:flex;align-items:center;gap:6px;background:#f3f4f6;border:none;border-radius:6px;padding:8px 12px;margin:8px 0;font-size:12px;font-weight:700;color:#64748b;cursor:pointer">← ' + esc(currentGroup) + '</button>';
   html += '<div style="background:#0D1B2A;color:#fff;border-radius:10px;padding:12px;margin-bottom:12px">';
   html += '<div style="font-size:11px;opacity:.8;font-weight:700;text-transform:uppercase;letter-spacing:.5px">' + esc(currentGroup) + '</div>';
-  html += '<div style="font-size:18px;font-weight:800;margin-top:2px">' + esc(currentLoc) + '</div>';
+  html += '<div style="display:flex;align-items:center;gap:8px;margin-top:2px">';
+  html += '<div style="font-size:18px;font-weight:800;flex:1">' + esc(currentLoc) + '</div>';
+  if (isCustomDup) html += '<span style="background:#fbbf24;color:#78350f;font-size:10px;padding:2px 8px;border-radius:8px;font-weight:800">DUPLICATE</span>';
+  html += '</div>';
   html += '<div style="font-size:11px;opacity:.7;margin-top:4px">' + filteredItems.length + ' items · ' + (showComp ? 'comprehensive' : 'standard') + '</div>';
   html += '</div>';
   
@@ -24579,6 +24634,83 @@ window.mbBackToLocations = function() {
   if (typeof renderMobilePage === 'function') renderMobilePage();
 };
 
+window.mbDuplicateLocation = function(groupName, sourceLocation) {
+  if (typeof haptic === 'function') haptic(8);
+  const insp = getActiveInsp();
+  if (!insp || !insp.record) return;
+  const rec = insp.record;
+  if (!rec.customLocations) rec.customLocations = [];
+  
+  /* Suggest a default name: "Bedroom 2 (2)", "Bedroom 2 (3)" etc */
+  let n = 2;
+  let suggestion;
+  while (true) {
+    suggestion = sourceLocation + ' (' + n + ')';
+    const exists = rec.customLocations.some(cl => cl.group === groupName && cl.customName === suggestion);
+    if (!exists) break;
+    n++;
+    if (n > 99) break;
+  }
+  
+  const name = prompt('Name for this duplicated location:\n(e.g. "Bedroom 5", "Second Bathroom", "Granny Flat Kitchen")', suggestion);
+  if (!name || !name.trim()) return;
+  const customName = name.trim();
+  
+  /* Check uniqueness in this group (against library names AND existing customs) */
+  const lib = window.INSPECTION_LIBRARY[insp.typeId];
+  const grp = lib && lib.groups.find(g => g.name === groupName);
+  if (grp && grp.locations.some(l => l.location === customName)) {
+    alert('A location named "' + customName + '" already exists in this group. Pick a different name.');
+    return;
+  }
+  if (rec.customLocations.some(cl => cl.group === groupName && cl.customName === customName)) {
+    alert('A duplicate named "' + customName + '" already exists. Pick a different name.');
+    return;
+  }
+  
+  rec.customLocations.push({
+    group: groupName,
+    sourceLocation: sourceLocation,
+    customName: customName,
+    created: Date.now()
+  });
+  
+  if (typeof saveProject === 'function') saveProject(true);
+  if (typeof showToast === 'function') showToast('✓ Duplicated as "' + customName + '"', 'ok');
+  if (typeof haptic === 'function') haptic([10,30,10]);
+  if (typeof renderMobilePage === 'function') renderMobilePage();
+};
+
+window.mbDeleteCustomLocation = function(idx) {
+  if (typeof haptic === 'function') haptic(8);
+  const insp = getActiveInsp();
+  if (!insp || !insp.record || !insp.record.customLocations) return;
+  const cl = insp.record.customLocations[idx];
+  if (!cl) return;
+  if (!confirm('Delete the duplicate "' + cl.customName + '"?\n\nAll items, notes and photos in this duplicate location will be lost.')) return;
+  
+  /* Wipe state for items under this custom name */
+  const prefix = cl.group + '::' + cl.customName + '::';
+  Object.keys(insp.locationItems || {}).forEach(k => {
+    if (k.indexOf(prefix) === 0) delete insp.locationItems[k];
+  });
+  
+  insp.record.customLocations.splice(idx, 1);
+  if (typeof saveProject === 'function') saveProject(true);
+  if (typeof showToast === 'function') showToast('✓ Removed "' + cl.customName + '"', 'ok');
+  if (typeof renderMobilePage === 'function') renderMobilePage();
+};
+
+window.mbSwitchInspection = function(typeId) {
+  if (typeof haptic === 'function') haptic(8);
+  if (!PROJECT.inspections) PROJECT.inspections = {};
+  PROJECT.inspections.currentType = typeId;
+  LIBRARY_STATE.currentGroup = null;
+  LIBRARY_STATE.currentLocation = null;
+  if (typeof saveProject === 'function') saveProject(true);
+  if (typeof renderMobilePage === 'function') renderMobilePage();
+};
+
 window.mbCloseInspection = function() {
   LIBRARY_STATE.currentGroup = null;
   LIBRARY_STATE.currentLocation = null;
@@ -24590,15 +24722,22 @@ window.mbCloseInspection = function() {
    5. ITEM HANDLERS
    ========================================================= */
 function getActiveInsp() {
-  if (!PROJECT.inspections || !PROJECT.inspections.length) return null;
-  return PROJECT.inspections[0];
+  /* PROJECT.inspections is an OBJECT keyed by typeId, with .currentType
+     pointing to the active one. The "active inspection" is the state record
+     for the currently selected type. We return a synthetic object with
+     { typeId, locationItems } that callers can use. */
+  if (!PROJECT || !PROJECT.inspections) return null;
+  const typeId = PROJECT.inspections.currentType || 'PrePurchaseBP';
+  if (!PROJECT.inspections[typeId]) PROJECT.inspections[typeId] = {};
+  const rec = PROJECT.inspections[typeId];
+  if (!rec.locationItems) rec.locationItems = {};
+  return { typeId: typeId, locationItems: rec.locationItems, record: rec };
 }
 
 window.mbToggleLibItem = function(key) {
   if (typeof haptic === 'function') haptic([8,20,8]);
   const insp = getActiveInsp();
   if (!insp) return;
-  if (!insp.locationItems) insp.locationItems = {};
   if (!insp.locationItems[key]) insp.locationItems[key] = {};
   insp.locationItems[key].checked = !insp.locationItems[key].checked;
   if (typeof saveProject === 'function') saveProject(true);
@@ -24609,7 +24748,6 @@ window.mbAddNoteLib = function(key) {
   if (typeof haptic === 'function') haptic(8);
   const insp = getActiveInsp();
   if (!insp) return;
-  if (!insp.locationItems) insp.locationItems = {};
   if (!insp.locationItems[key]) insp.locationItems[key] = {};
   const existing = insp.locationItems[key].notes || '';
   
@@ -24640,7 +24778,6 @@ window.mbAddPhotoLib = function(key) {
   if (typeof haptic === 'function') haptic(8);
   const insp = getActiveInsp();
   if (!insp) return;
-  if (!insp.locationItems) insp.locationItems = {};
   if (!insp.locationItems[key]) insp.locationItems[key] = {};
   if (!insp.locationItems[key].photos) insp.locationItems[key].photos = [];
   
@@ -24678,9 +24815,9 @@ window.mbAddPhotoLib = function(key) {
 window.mbAIWriteLib = function(key) {
   if (typeof haptic === 'function') haptic(8);
   const insp = getActiveInsp();
-  if (!insp || !insp.locationItems) return;
+  if (!insp) return;
+  if (!insp.locationItems[key]) insp.locationItems[key] = {};
   const state = insp.locationItems[key];
-  if (!state) return;
   
   /* Parse the key to find the item label */
   const parts = key.split('::');
@@ -24712,21 +24849,92 @@ window.mbAIWriteLib = function(key) {
 };
 
 /* =========================================================
-   6. HOOK INTO MOBILE INSPECT TAB
+   6. HOOK INTO MOBILE INSPECT TAB — v1.2 AGGRESSIVE OVERRIDE
    ========================================================= */
-(function hookInspectRenderer() {
-  const orig = window.renderMobileInspect;
-  if (typeof orig !== 'function') return;
-  window.renderMobileInspect = function() {
-    /* Check if there's an active inspection with a library entry */
+window.HBC_PHASE_P_VERSION = '1.3';
+
+/* Default Comprehensive mode ON so deep checklist is visible immediately */
+if (LIBRARY_STATE && LIBRARY_STATE.showComprehensive === false) {
+  LIBRARY_STATE.showComprehensive = true;
+}
+
+/* AGGRESSIVE: Disable the old "Current location" pill entirely.
+   The wrap at line ~10460 prepends it to renderMobileInspect's output.
+   We override mbRenderLocationSelector to return empty string,
+   so even if the old wrap fires it adds nothing. */
+window.mbRenderLocationSelector = function() {
+  return ''; /* Phase P kills this. Location is selected inside the library UI. */
+};
+
+/* AGGRESSIVE: completely REPLACE renderMobileInspect.
+   Don't chain through wraps — just take over. If library doesn't exist
+   for the current type, show a clear message instead of the old confusing UI. */
+window.renderMobileInspect = function() {
+  let banner = '<div style="background:linear-gradient(90deg,#0D1B2A,#F05A28);color:#fff;padding:6px 10px;text-align:center;font-size:11px;font-weight:700;letter-spacing:.5px;margin:0 -8px 6px;border-radius:4px">⚡ HBC OS PHASE P v' + window.HBC_PHASE_P_VERSION + ' · ' + Object.keys(window.INSPECTION_LIBRARY || {}).length + ' libraries</div>';
+  
+  try {
     const insp = getActiveInsp();
-    if (insp && insp.typeId && hasInspectionLibrary(insp.typeId)) {
-      const html = renderMobileInspectionLibrary(insp.typeId, insp);
-      if (html) return html;
+    if (!insp || !insp.typeId) {
+      return banner + '<div style="padding:20px;text-align:center;color:#64748b">No active inspection. Pick one from the type selector.</div>';
     }
-    /* Fall back to old renderer */
-    return orig.apply(this, arguments);
+    if (!hasInspectionLibrary(insp.typeId)) {
+      return banner + '<div style="padding:20px"><b>Inspection type "' + esc(insp.typeId) + '" has no library yet.</b><br><br>Available types: ' + Object.keys(window.INSPECTION_LIBRARY).join(', ') + '<br><br><button onclick="mbSwitchInspection(\'PrePurchaseBP\')" style="background:#F05A28;color:#fff;border:none;border-radius:8px;padding:10px 16px;font-weight:700;cursor:pointer">Switch to Pre-Purchase</button></div>';
+    }
+    const html = renderMobileInspectionLibrary(insp.typeId, insp);
+    if (!html) {
+      return banner + '<div style="padding:20px;color:#dc2626">Library renderer returned null for typeId=' + esc(insp.typeId) + '</div>';
+    }
+    return banner + html;
+  } catch(e) {
+    console.error('[Phase P] Library renderer failed:', e);
+    return banner + '<div style="background:#fee2e2;color:#991b1b;padding:14px;border-radius:8px;margin:10px"><b>⚠ Phase P error:</b><br>' + esc(e.message || String(e)) + '<br><br><small>Stack: ' + esc((e.stack || '').split('\n').slice(0,3).join(' | ')) + '</small></div>';
+  }
+};
+console.log('[Phase P v' + window.HBC_PHASE_P_VERSION + '] AGGRESSIVE override installed. renderMobileInspect REPLACED. mbRenderLocationSelector KILLED.');
+
+/* =========================================================
+   8. ALWAYS-VISIBLE PHASE P BADGE + GLOBAL DEEP CHECKLIST TOGGLE
+   ========================================================= */
+(function injectGlobalUI() {
+  /* Wait for body */
+  if (!document.body) {
+    setTimeout(injectGlobalUI, 50);
+    return;
+  }
+  
+  /* Remove any previous injection */
+  document.querySelectorAll('#hbcPhasePBadge, #hbcPhasePToggle').forEach(el => el.remove());
+  
+  /* GIANT VERSION BADGE — fixed top-right corner, on EVERY page */
+  const badge = document.createElement('div');
+  badge.id = 'hbcPhasePBadge';
+  badge.style.cssText = 'position:fixed;top:10px;right:10px;z-index:99999;background:#F05A28;color:#fff;padding:6px 12px;border-radius:20px;font-size:11px;font-weight:800;letter-spacing:.5px;box-shadow:0 4px 12px rgba(240,90,40,.5);font-family:sans-serif;pointer-events:none;border:2px solid #fff';
+  badge.textContent = '⚡ PHASE P v' + window.HBC_PHASE_P_VERSION;
+  document.body.appendChild(badge);
+  
+  /* GIANT DEEP CHECKLIST TOGGLE — fixed BOTTOM, full width, always visible */
+  const toggleBar = document.createElement('div');
+  toggleBar.id = 'hbcPhasePToggle';
+  function paintToggle() {
+    const on = window.LIBRARY_STATE && window.LIBRARY_STATE.showComprehensive;
+    toggleBar.innerHTML = '<button onclick="window.toggleComprehensive && window.toggleComprehensive(); document.getElementById(\'hbcPhasePToggle\') && window._paintHBCToggle && window._paintHBCToggle();" style="width:100%;background:' + (on ? '#F05A28' : '#fff') + ';color:' + (on ? '#fff' : '#0D1B2A') + ';border:none;padding:14px;font-size:14px;font-weight:800;letter-spacing:.5px;cursor:pointer;display:flex;align-items:center;justify-content:center;gap:10px;font-family:sans-serif">' +
+      '<span style="font-size:20px">' + (on ? '☑' : '☐') + '</span>' +
+      '<span>' + (on ? 'DEEP CHECKLIST ON — Tap for short list' : 'TAP TO TURN ON DEEP CHECKLIST') + '</span>' +
+    '</button>';
+  }
+  window._paintHBCToggle = paintToggle;
+  toggleBar.style.cssText = 'position:fixed;bottom:0;left:0;right:0;z-index:99998;background:#fff;border-top:3px solid #F05A28;box-shadow:0 -4px 16px rgba(0,0,0,.15);font-family:sans-serif';
+  document.body.appendChild(toggleBar);
+  paintToggle();
+  
+  /* Wrap toggleComprehensive to also repaint our fixed toggle */
+  const origToggle = window.toggleComprehensive;
+  window.toggleComprehensive = function() {
+    if (origToggle) origToggle();
+    paintToggle();
   };
+  
+  console.log('[Phase P v' + window.HBC_PHASE_P_VERSION + '] Global UI injected: badge + bottom toggle bar');
 })();
 
 /* =========================================================
@@ -24751,6 +24959,650 @@ window.getInspectionLibraryStats = function(typeId) {
 
 console.log('[Phase P Part 2] Library renderer + AI keys in inspection + toggle loaded');
 console.log('[Phase P] Library stats:', Object.keys(window.INSPECTION_LIBRARY).map(id => ({ id: id, stats: getInspectionLibraryStats(id) })));
+
+
+
+/* ============================================================
+   PHASE P COMPREHENSIVE EXPANSION (deep checklist bulk-up)
+   ============================================================ */
+/* ============================================================
+   PHASE P COMPREHENSIVE EXPANSION
+   Adds industry-grade 'comp' items to every location at runtime.
+   ============================================================ */
+(function expandComprehensive() {
+  if (!window.INSPECTION_LIBRARY) { setTimeout(expandComprehensive, 100); return; }
+
+  function add(typeId, groupName, locationName, items) {
+    const lib = window.INSPECTION_LIBRARY[typeId];
+    if (!lib) return 0;
+    const g = lib.groups.find(x => x.name === groupName);
+    if (!g) return 0;
+    const l = g.locations.find(x => x.location === locationName);
+    if (!l) return 0;
+    const slug = locationName.toLowerCase().replace(/[^a-z0-9]+/g, '_');
+    items.forEach((it, i) => {
+      l.items.push({
+        key: 'compx_' + slug + '_' + l.items.length + '_' + i,
+        label: it[0], sev: it[1] || 2, ref: it[2] || '', level: 'comp'
+      });
+    });
+    return items.length;
+  }
+
+  /* Bulk add to every location in a group with given items */
+  function addToGroup(typeId, groupName, items) {
+    const lib = window.INSPECTION_LIBRARY[typeId];
+    if (!lib) return 0;
+    const g = lib.groups.find(x => x.name === groupName);
+    if (!g) return 0;
+    let total = 0;
+    g.locations.forEach(l => {
+      total += add(typeId, groupName, l.location, items);
+    });
+    return total;
+  }
+
+  /* ===== Reusable bundles ===== */
+  const ROOM_Q = [
+    ['Wall plumb measured 4 corners — ≤ 4mm in 2m', 2, 'GST&T 9.13'],
+    ['Wall surface flatness — no bow > 4mm in 2m', 2, 'GST&T 9.13'],
+    ['Paint finish Level 4 — no holidays, runs, brush strokes', 2, 'GST&T 12.02'],
+    ['Paint colour uniformity between cuts', 1, 'GST&T 12.02'],
+    ['Wall corner trueness — internal/external', 2, 'GST&T 9.04'],
+    ['Ceiling level uniformity — fall ≤ 10mm in 4m', 2, 'GST&T 9.13'],
+    ['Ceiling paint finish — orange peel acceptable', 2, 'GST&T 12.02'],
+    ['Cornice mitre joints — gap ≤ 1mm', 2, 'GST&T 10.06'],
+    ['Cornice straightness — no waves', 1, 'GST&T 10.06'],
+    ['Skirting scribe to floor — gap ≤ 2mm', 2, 'GST&T 10.04'],
+    ['Skirting mitre at corners — clean joint', 1, 'GST&T 10.04'],
+    ['Architrave mitre joints — gap ≤ 1mm', 2, 'GST&T 10.01'],
+    ['Door reveal margins consistent 3 sides', 2, 'GST&T 10.05'],
+    ['Door head margin — 3mm consistent', 2, 'GST&T 8.04'],
+    ['Door jamb plumb — ≤ 3mm in 2m', 3, 'GST&T 8.04'],
+    ['Door catch alignment with strike', 2, ''],
+    ['Door closes by handle swing only', 2, ''],
+    ['Door bottom clearance 5–10mm over floor', 2, 'GST&T 8.04'],
+    ['Door hinges flush with jamb', 2, 'GST&T 8.04'],
+    ['Light switch heights consistent ~1100mm', 1, ''],
+    ['Power outlet heights consistent', 1, ''],
+    ['Power outlet plates plumb and flush', 1, ''],
+    ['Hardware finish consistency throughout', 1, ''],
+    ['Floor sheen consistency', 1, ''],
+    ['Floor covering joins neat', 2, 'GST&T 14.03'],
+    ['Floor levelness — ≤ 4mm in 2m', 2, 'GST&T 2.08'],
+    ['HVAC outlet positioning and grille finish', 1, ''],
+    ['Smoke alarm — date stamp within 10yr life', 4, 'AS 3786'],
+    ['Smoke alarm interconnection tested', 5, 'BR 2018 r110'],
+    ['Window flyscreen tension and frame', 1, ''],
+    ['Window architrave consistency with door style', 1, ''],
+    ['Natural light penetration adequate', 1, ''],
+    ['Sound transmission to adjacent (subjective)', 2, ''],
+    ['Glazing energy spec (WERS label)', 2, 'NCC J1']
+  ];
+  const BEDR = [
+    ['Window restrictor where sill < 1.7m AFFL and drop > 2m', 5, 'NCC H3D9'],
+    ['Bedroom door undercut for return air ~20mm', 2, ''],
+    ['BIR/WIR door operation', 2, ''],
+    ['BIR/WIR hanging rail height/load', 1, ''],
+    ['BIR/WIR shelving adjustable', 1, ''],
+    ['BIR/WIR drawer runners full extension', 1, ''],
+    ['Power outlets each side of bed', 2, ''],
+    ['Curtain track or pelmet secure', 1, ''],
+    ['Heating/cooling outlet operable', 2, '']
+  ];
+  const KITCH = [
+    ['Cabinet door overlay ± 1mm', 2, 'GST&T 13.05'],
+    ['Drawer gap front-to-back consistent', 2, 'GST&T 13.05'],
+    ['Cabinet hinge adjustment — flush', 2, 'GST&T 13.05'],
+    ['Cabinet kicker level and seal', 1, ''],
+    ['Soft-close on all drawers/doors', 1, ''],
+    ['Drawer runners — full extension smooth', 2, ''],
+    ['Pantry shelf adjustability', 1, ''],
+    ['Bench cantilever — engineered support', 3, 'GST&T 13.04'],
+    ['Bench joins — sealants level', 2, 'GST&T 13.04'],
+    ['Bench-to-wall scribe quality', 2, 'GST&T 13.04'],
+    ['Bench-to-splashback junction sealed', 2, ''],
+    ['Splashback tile alignment with bench joints', 2, ''],
+    ['Splashback grout colour to spec', 1, ''],
+    ['Sink basin grade and noise damping', 1, ''],
+    ['Mixer aerator flow rate (WELS)', 1, 'WELS'],
+    ['Cooktop level across hob', 2, ''],
+    ['Cooktop clearances gas per AS 5601', 4, 'AS 5601'],
+    ['Range hood duct external (not roof void)', 3, 'AS 1668.2'],
+    ['Range hood filter accessibility', 1, ''],
+    ['Oven door alignment, seal, function', 2, ''],
+    ['Oven cavity ventilation', 2, ''],
+    ['Microwave alcove ventilation', 2, ''],
+    ['Fridge alcove allows standard + air gap', 2, ''],
+    ['Dishwasher level and door alignment', 2, ''],
+    ['Toe-kick LED if specified', 1, ''],
+    ['Floor tile lippage ≤ 2mm', 3, 'GST&T 11.09'],
+    ['Floor tile alignment with cabinet face', 2, ''],
+    ['Floor-wall tile junction silicone', 2, ''],
+    ['Cabinet handle alignment consistent', 1, 'GST&T 13.05'],
+    ['LED downlight pattern symmetry', 1, ''],
+    ['Task lighting under upper cabinets', 1, ''],
+    ['GPO count adequate (min 4 above bench)', 2, ''],
+    ['USB outlets functional if specified', 1, '']
+  ];
+  const WET = [
+    ['Tile pattern alignment floor to wall', 2, 'GST&T 11.09'],
+    ['Tile lippage random check ≤ 2mm', 3, 'GST&T 11.09'],
+    ['Grout line straightness ± 1mm', 2, 'GST&T 11.06'],
+    ['Mitre cuts at internal corners', 2, 'GST&T 11.09'],
+    ['Bullnose / edge profile to spec', 2, ''],
+    ['Niche finish — square, drainage, sealed', 2, ''],
+    ['Shower screen plumb and level', 3, ''],
+    ['Shower screen door alignment, magnet seal', 2, ''],
+    ['Shower screen pivot smoothness', 1, ''],
+    ['Shower mixer height/angle to user', 1, ''],
+    ['Shower rose flow and spray pattern', 1, ''],
+    ['Shower drain grate flush with tile', 2, ''],
+    ['Floor fall to waste water-tested', 4, 'AS 3740'],
+    ['Hob heights at door threshold', 3, 'AS 3740'],
+    ['Bath spout reach and flow', 1, ''],
+    ['Bath mixer alignment plumb', 2, ''],
+    ['Bath waste plug seal', 2, ''],
+    ['Bath skirt access panel finish', 2, ''],
+    ['Vanity drawer/door finish', 2, 'GST&T 13.05'],
+    ['Vanity benchtop level and joins', 2, 'GST&T 13.04'],
+    ['Basin overflow operates', 2, ''],
+    ['Mirror cabinet alignment', 1, ''],
+    ['Tile-to-bath silicone bead tooled', 2, ''],
+    ['Tile-to-vanity silicone bead tooled', 2, ''],
+    ['Exhaust fan flow adequate (25L/s min)', 3, 'AS 1668.2'],
+    ['Exhaust duct external (not roof void)', 4, 'NCC F4'],
+    ['Heat lamp operation and coverage', 1, ''],
+    ['Window glazing privacy/obscure', 2, 'AS 1288'],
+    ['Window head/sill flashing visible', 3, 'NCC F1'],
+    ['Power outlet IP rating per zone', 4, 'AS/NZS 3000'],
+    ['Lighting IP rating per zone', 3, 'AS/NZS 3000'],
+    ['Tempering valve 50°C + dated cert', 5, 'AS 3500.4'],
+    ['Anti-scald mixer cert', 4, 'AS 3500.4'],
+    ['Waterproofer Compliance Cert', 5, 'AS 3740'],
+    ['Mould-free sealant check', 4, '']
+  ];
+  const EXT = [
+    ['Brick course consistency at corners', 2, 'AS 3700'],
+    ['Brick perpend alignment vertically', 2, 'AS 3700'],
+    ['Mortar joint width consistency', 2, 'AS 3700'],
+    ['Mortar colour batch match', 1, ''],
+    ['Render finish texture/colour consistency', 2, ''],
+    ['Render control joints sealed/tooled', 2, ''],
+    ['Window head flashing visible outside', 3, 'NCC F1'],
+    ['Window sub-sill flashing visible', 3, 'NCC F1'],
+    ['Window-to-cladding sealant quality', 2, ''],
+    ['Door head flashing visible', 3, 'NCC F1'],
+    ['Door threshold seal and pan', 3, ''],
+    ['Soffit lining material per spec', 1, ''],
+    ['Soffit ventilation area adequate', 3, 'NCC F6'],
+    ['Gutter bracket spacing', 2, 'AS 3500.3'],
+    ['Downpipe fixing to wall', 2, ''],
+    ['Articulation joints visible and sealed', 3, 'AS 3700'],
+    ['Weep holes every 4th perpend max 1200', 4, 'AS 3700'],
+    ['Cavity flashings above openings', 4, 'NCC F1'],
+    ['Cracks mapped, measured, classified', 4, 'CSIRO BCC 21'],
+    ['DPC visible at slab edge', 4, 'AS 3700'],
+    ['Wall ties spacing per AS 3700', 4, 'AS 3700']
+  ];
+  const ROOFVOID = [
+    ['Truss heel bearing on top plate', 5, 'AS 4440'],
+    ['Truss splice plate condition', 4, 'AS 4440'],
+    ['Truss bracing — diagonal and longitudinal', 5, 'AS 4440'],
+    ['Web members straight, no bow', 4, 'AS 4440'],
+    ['Sarking taped and lapped', 3, 'NCC F1'],
+    ['Insulation R-value full coverage', 3, 'NCC J1'],
+    ['Downlight insulation clearance ≥ 50mm', 5, 'AS/NZS 3000'],
+    ['Recessed light heat damage signs', 3, ''],
+    ['Vent pipe terminations sealed', 3, 'AS 3500'],
+    ['A/C duct supported, insulated', 2, ''],
+    ['Condensate drain to safe discharge', 2, ''],
+    ['Water staining on rafters/sarking', 4, ''],
+    ['Electrical junction boxes covered', 4, 'AS/NZS 3000'],
+    ['Cable runs supported per AS 3000', 3, 'AS/NZS 3000'],
+    ['Rodent activity — droppings, gnawing', 3, 'AS 4349.3'],
+    ['Termite activity in framing', 5, 'AS 4349.3'],
+    ['Borer damage in timber', 3, 'AS 4349.3'],
+    ['Wood rot or decay', 4, 'AS 4349.3'],
+    ['Manhole access size and ladder', 2, ''],
+    ['Stored items not obstructing', 1, '']
+  ];
+  const SUBFLOOR = [
+    ['Damp proof course visible', 4, 'AS 3700'],
+    ['Moisture meter readings multiple points', 4, 'AS 4349.3'],
+    ['Plumbing leak stains on framing', 4, ''],
+    ['Stored rubbish present', 3, 'AS 4349.3'],
+    ['Insulation type/R-value', 2, 'NCC J1'],
+    ['Cross-flow ventilation clear', 4, 'NCC F6'],
+    ['Foundation type recorded', 2, ''],
+    ['Termite barrier integrity', 5, 'AS 3660.1'],
+    ['Active vs old termite damage', 5, 'AS 4349.3'],
+    ['Termite mudding/leads on piers', 5, 'AS 4349.3'],
+    ['Pier bracing high stumps', 4, 'AS 1684'],
+    ['Bearer-to-stump connection plates', 4, 'AS 1684'],
+    ['Joist hangers galvanised, full nailing', 4, 'AS 1684'],
+    ['Ant cap condition', 4, 'AS 3660.1'],
+    ['Pooling water/saturation', 4, '']
+  ];
+
+  /* ===== APPLY TO PRE-PURCHASE B+P ===== */
+  let n = 0;
+  
+  ['Entry / Hallway','Lounge / Living','Dining','Rumpus / Family Room','Stairs / Stairwell','Garage (Internal Access)'].forEach(loc => n += add('PrePurchaseBP','INTERIOR', loc, ROOM_Q));
+  n += add('PrePurchaseBP','INTERIOR','Kitchen', KITCH);
+  ['Master Bedroom','Bedroom 2','Bedroom 3','Bedroom 4 / Study'].forEach(loc => n += add('PrePurchaseBP','INTERIOR', loc, BEDR.concat(ROOM_Q.slice(0, 15))));
+  ['Main Bathroom','Ensuite','Powder Room / Separate WC','Laundry'].forEach(loc => n += add('PrePurchaseBP','INTERIOR', loc, WET));
+  
+  ['Front Elevation','Rear Elevation','Left Side Elevation','Right Side Elevation'].forEach(loc => n += add('PrePurchaseBP','EXTERIOR', loc, EXT));
+  
+  n += add('PrePurchaseBP','STRUCTURE / EXTERNAL','Sub-floor (if accessible)', SUBFLOOR);
+  n += add('PrePurchaseBP','STRUCTURE / EXTERNAL','Roof Void (if accessible)', ROOFVOID);
+  n += add('PrePurchaseBP','STRUCTURE / EXTERNAL','External Walls', EXT);
+  ['Roof Exterior — Front','Roof Exterior — Rear','Roof Exterior — Sides','Footings / Slab Edge','Chimney / Flue (if present)'].forEach(loc => n += add('PrePurchaseBP','STRUCTURE / EXTERNAL', loc, EXT.slice(0, 8)));
+  
+  /* Pre-Purchase utilities */
+  n += add('PrePurchaseBP','UTILITIES & SERVICES','Electrical Switchboard', [
+    ['Main switch rating + breaker count', 2, 'AS/NZS 3000'],
+    ['Sub-mains adequate for load', 3, 'AS/NZS 3000'],
+    ['Compliance Cert visible', 3, ''],
+    ['Surge protection device', 2, 'AS/NZS 3000'],
+    ['Battery/EV charger compliance', 3, 'AS/NZS 4777'],
+    ['Asbestos backing board (older homes)', 4, ''],
+    ['Earthing system type recorded', 4, 'AS/NZS 3000'],
+    ['Circuit breakers (no ceramic fuses)', 3, 'AS/NZS 3000']
+  ]);
+  n += add('PrePurchaseBP','UTILITIES & SERVICES','Hot Water System', [
+    ['Manufacturer date code', 3, ''],
+    ['Anode rod replacement record', 3, ''],
+    ['Pipe insulation visible', 2, 'NCC J1'],
+    ['Recirculation pump (if present)', 2, ''],
+    ['Heat pump noise level', 1, ''],
+    ['Energy rating sticker', 2, ''],
+    ['Solar HW pump visible (if solar)', 2, '']
+  ]);
+  n += add('PrePurchaseBP','UTILITIES & SERVICES','Plumbing', [
+    ['Mains meter location/reading', 1, ''],
+    ['Backflow prevention at meter', 3, 'AS 3500'],
+    ['Stop tap labelled accessible', 2, ''],
+    ['Hot water flush time at far tap', 1, ''],
+    ['Drainage gurgle on flush', 3, ''],
+    ['Gas meter and regulator condition', 3, 'AS 5601']
+  ]);
+  n += add('PrePurchaseBP','UTILITIES & SERVICES','HVAC (Heating / Cooling)', [
+    ['Filter access and cleanliness', 1, ''],
+    ['Service tag last date', 1, ''],
+    ['Energy rating sticker', 1, 'NCC J1'],
+    ['Outdoor unit level and isolation pad', 2, ''],
+    ['Refrigerant line lagging', 2, ''],
+    ['Condensate drain run', 2, ''],
+    ['Zoning controller function', 2, ''],
+    ['Thermostat location and operation', 1, '']
+  ]);
+
+  /* ===== STAGE PRE-POUR ===== */
+  const PREPOUR = [
+    ['Site classification on site (A/S/M/H1/H2/P)', 4, 'AS 2870'],
+    ['Wind classification recorded (N1-N4)', 4, 'AS 4055'],
+    ['Excavation depth/width verified', 4, 'AS 2870'],
+    ['Stepped footing dimensions match plans', 4, 'AS 2870'],
+    ['Slab edge thickenings per design', 4, 'AS 2870'],
+    ['Vapour barrier 200μm minimum', 4, 'AS 2870'],
+    ['Vapour barrier joints taped no punctures', 4, 'AS 2870'],
+    ['Mesh grade (SL62/72/81/92) verified', 5, 'AS 3600'],
+    ['Bar chair spacing ≤ 1m intervals', 4, 'AS 3600'],
+    ['Cover blocks at perimeter (40mm)', 4, 'AS 3600'],
+    ['Starter bar lap length per design', 5, 'AS 3600'],
+    ['Starter bar projection above slab', 5, 'AS 3600'],
+    ['Trimmer bars at all openings', 4, 'AS 3600'],
+    ['Termite reticulation injection points indexed', 4, 'AS 3660.1'],
+    ['Termite collar at every penetration', 5, 'AS 3660.1'],
+    ['Engineer pre-pour certification', 5, ''],
+    ['Concrete mix design and strength', 4, 'AS 3600'],
+    ['Slump test plan agreed', 3, 'AS 1379'],
+    ['Cylinder testing arranged', 3, 'AS 1012'],
+    ['Curing materials onsite', 3, 'AS 3600']
+  ];
+  ['SITE & DOCUMENTATION','EXCAVATION & FOOTINGS','FORMWORK','VAPOUR BARRIER (DPM)','REINFORCEMENT','WAFFLE POD SLABS','SERVICE PENETRATIONS','TERMITE MANAGEMENT','CERTIFICATION & POUR'].forEach(grp => {
+    const g = window.INSPECTION_LIBRARY['StagePrePour'].groups.find(x => x.name === grp);
+    if (g) g.locations.forEach(l => n += add('StagePrePour', grp, l.location, PREPOUR.slice(0, 8)));
+  });
+
+  /* ===== STAGE FRAME ===== */
+  const FRAME = [
+    ['Stud grade stamps visible', 3, 'AS 1684'],
+    ['Stud moisture < 18%', 3, ''],
+    ['Wall plumb 2 axes', 3, 'AS 1684'],
+    ['Wall length tolerance ± 5mm', 2, ''],
+    ['Top plate joints over studs', 3, 'AS 1684'],
+    ['Lintel size matches AS 1684 tables', 5, 'AS 1684'],
+    ['Lintel bearing on trimmers', 5, 'AS 1684'],
+    ['Trimmer studs at large openings', 4, 'AS 1684'],
+    ['Bracing schedule signed off', 5, 'AS 1684'],
+    ['Bracing distribution wall lengths', 5, 'AS 1684'],
+    ['Tie-down rods continuous to footings', 5, 'AS 1684'],
+    ['Cyclone ties on roof connections', 5, 'AS 1684'],
+    ['Hold-down strap zinc coated', 3, 'AS 1684'],
+    ['Truss tie-down correct number', 5, 'AS 4440'],
+    ['Truss layout matches engineer plan', 5, 'AS 4440'],
+    ['Truss webs not site-modified', 5, 'AS 4440'],
+    ['Joist hangers full nailing', 4, 'AS 1684'],
+    ['Floor sheet edges over joists', 3, ''],
+    ['Floor sheet glued AND nailed', 3, 'AS 1684'],
+    ['Treated timber to wet zones', 4, 'AS 1604'],
+    ['Termite shield under bottom plate', 4, 'AS 3660.1']
+  ];
+  ['STRUCTURE','ROOF FRAMING','FLOOR FRAMING (Upper levels)','COMPLIANCE & SIGN-OFF'].forEach(grp => {
+    const g = window.INSPECTION_LIBRARY['StageFrame'].groups.find(x => x.name === grp);
+    if (g) g.locations.forEach(l => n += add('StageFrame', grp, l.location, FRAME.slice(0, 10)));
+  });
+
+  /* ===== STAGE LOCKUP ===== */
+  const LOCKUP = [
+    ['Tile/sheet overlap correct for pitch', 4, 'AS 1562.1'],
+    ['Sheet roof fixing every 2nd corrugation', 4, 'AS 1562.1'],
+    ['Valley flashing width 200mm min', 4, 'NCC F1'],
+    ['Box gutters with overflow scuppers', 4, 'AS 3500.3'],
+    ['Roof penetration flashings — boots, caps', 4, 'NCC F1'],
+    ['Sarking draped into gutter', 3, 'NCC F1'],
+    ['Gutter fall 1:500 min', 4, 'AS 3500.3'],
+    ['Downpipe size per catchment', 4, 'AS 3500.3'],
+    ['Eaves ventilation area adequate', 4, 'NCC F6'],
+    ['Cavity weep holes count', 4, 'AS 3700'],
+    ['Cavity ties type/spacing', 4, 'AS 3700'],
+    ['Cavity flashings above openings', 5, 'NCC F1'],
+    ['Cavity flashings below windows', 5, 'NCC F1'],
+    ['Articulation joints sealed', 4, 'AS 3700'],
+    ['Wall wrap continuous, taped', 4, 'NCC F1'],
+    ['Window plumb and level', 3, 'AS 2047'],
+    ['Window sub-sill flashing', 5, 'NCC F1'],
+    ['Window head flashing', 5, 'NCC F1'],
+    ['Window restrictors bedrooms > 2m AFFL', 5, 'NCC H3D9'],
+    ['External door threshold flashing', 5, 'NCC F1'],
+    ['External door weather seals all sides', 4, 'NCC F1'],
+    ['Glazing safety glass to AS 1288', 5, 'AS 1288'],
+    ['Glazing energy rating', 3, 'NCC J1'],
+    ['Cable runs supported per AS 3000', 4, 'AS/NZS 3000'],
+    ['Smoke alarm wiring bedrooms + path', 5, 'BR 2018 r110'],
+    ['Pipe lagging in cavities', 3, 'NCC F6'],
+    ['Gas pipework testing record', 5, 'AS 5601'],
+    ['Wall insulation R-value verified', 4, 'NCC J1'],
+    ['Ceiling insulation R-value verified', 4, 'NCC J1'],
+    ['Downlight clearance ≥ 50mm from insulation', 5, 'AS/NZS 3000']
+  ];
+  ['EXTERNAL ENVELOPE','WINDOWS & DOORS','INTERNAL ROUGH-IN','INSULATION'].forEach(grp => {
+    const g = window.INSPECTION_LIBRARY['StageLockup'].groups.find(x => x.name === grp);
+    if (g) g.locations.forEach(l => n += add('StageLockup', grp, l.location, LOCKUP.slice(0, 12)));
+  });
+
+  /* ===== STAGE WATERPROOFING ===== */
+  const WP = [
+    ['Substrate primer per manufacturer spec', 4, 'AS 3740'],
+    ['Substrate moisture within limits', 4, 'AS 3740'],
+    ['Substrate cracks > 1mm pre-treated', 4, 'AS 3740'],
+    ['Junctions chamfered or coved', 3, 'AS 3740'],
+    ['Membrane manufacturer compliance cert', 4, 'AS 3740'],
+    ['Two coats of membrane visible', 4, 'AS 3740'],
+    ['Bond breaker tape at angles', 4, 'AS 3740'],
+    ['Membrane wall extension 1800mm in shower', 5, 'AS 3740'],
+    ['Membrane turn-up 25mm at floor', 4, 'AS 3740'],
+    ['Drain flange bedded in membrane', 5, 'AS 3740'],
+    ['Pipe penetration collar sealed', 5, 'AS 3740'],
+    ['Hob downturn at door threshold', 4, 'AS 3740'],
+    ['Cure time observed before tiling', 4, 'AS 3740'],
+    ['24-hour flood test documented', 4, 'AS 3740'],
+    ['Photo evidence before tiling', 3, ''],
+    ['Waterproofer licensed Victoria', 5, 'BR 2018']
+  ];
+  ['SUBSTRATE','MEMBRANE — WET AREAS','MEMBRANE — EXTERNAL','TESTING & CERT'].forEach(grp => {
+    const g = window.INSPECTION_LIBRARY['StageWaterproofing'].groups.find(x => x.name === grp);
+    if (g) g.locations.forEach(l => n += add('StageWaterproofing', grp, l.location, WP.slice(0, 10)));
+  });
+
+  /* ===== STAGE FIXING ===== */
+  const FIX = [
+    ['Plasterboard thickness per wall type', 3, 'AS 2588'],
+    ['Wet-area board to manufacturer spec', 4, 'AS 2589'],
+    ['Fire-rated sheets garage/separating walls', 5, 'NCC E1'],
+    ['Set finish Level 4 painted walls', 3, 'GST&T 9.13'],
+    ['Cornice consistency around rooms', 2, 'GST&T 10.06'],
+    ['Acoustic seal perimeter (party walls)', 4, 'NCC F5'],
+    ['Door clearance 2-5mm from floor', 3, 'GST&T 8.04'],
+    ['Door 3 hinges fully secured', 3, ''],
+    ['Privacy locks bath/WC doors', 3, ''],
+    ['Architraves mitred tight ≤ 1mm', 2, 'GST&T 10.01'],
+    ['Skirting tight to floor ≤ 1mm', 2, 'GST&T 10.04'],
+    ['Cabinet doors aligned ≤ 2mm', 3, 'GST&T 13.05'],
+    ['Drawer fronts aligned', 3, 'GST&T 13.05'],
+    ['Soft close drawers and doors', 1, ''],
+    ['Benchtop level tight to wall', 3, 'GST&T 13.04'],
+    ['Splashback fitted and sealed', 3, ''],
+    ['Floor tile lippage ≤ 2mm', 4, 'GST&T 11.09'],
+    ['Wall tile lippage ≤ 2mm', 4, 'AS 3958'],
+    ['Grout colour consistency', 3, 'GST&T 11.06'],
+    ['Silicone seal at junctions', 4, 'AS 3740'],
+    ['Tap function no leaks', 4, 'AS 3500'],
+    ['Tempering valve cert 50°C', 5, 'AS 3500.4'],
+    ['Smoke alarms installed + interconnected', 5, 'AS 3786'],
+    ['Downlight insulation clearance', 5, 'AS/NZS 3000'],
+    ['Exhaust fans vented external', 4, 'NCC F4'],
+    ['RCDs on all sub-circuits', 5, 'AS/NZS 3000'],
+    ['Compliance Cert Electrical', 5, ''],
+    ['Compliance Cert Plumbing', 5, '']
+  ];
+  ['INTERNAL LINING','JOINERY','WET AREA FIT-OFF','ELECTRICAL FIT-OFF','PLUMBING FIT-OFF'].forEach(grp => {
+    const g = window.INSPECTION_LIBRARY['StageFixing'].groups.find(x => x.name === grp);
+    if (g) g.locations.forEach(l => n += add('StageFixing', grp, l.location, FIX.slice(0, 12)));
+  });
+
+  /* ===== STAGE PCI ===== */
+  const PCI = [
+    ['Paint defect log — touch-ups required', 1, 'GST&T 12.02'],
+    ['All wall plumb random checks', 2, 'GST&T 9.13'],
+    ['All door operation tests', 2, ''],
+    ['All window operation tests', 2, 'AS 2047'],
+    ['All taps tested for leaks', 4, 'AS 3500'],
+    ['All drains flow tested', 3, 'AS 3500'],
+    ['Tile lippage random checks all wet', 3, 'GST&T 11.09'],
+    ['Cabinet door alignment all rooms', 2, 'GST&T 13.05'],
+    ['Smoke alarms test buttons each', 5, 'AS 3786'],
+    ['Power outlets — all working with tester', 4, 'AS/NZS 3000'],
+    ['Light fittings all working', 2, ''],
+    ['HVAC — heating mode test', 2, ''],
+    ['HVAC — cooling mode test', 2, ''],
+    ['Hot water at all outlets', 4, 'AS 3500'],
+    ['Garage door auto-reverse test', 4, 'AS/NZS 4505'],
+    ['Window restrictors > 2m AFFL', 5, 'NCC H3D9'],
+    ['Compliance Certificates colour copies', 2, ''],
+    ['Termite warranty documentation', 4, 'AS 3660.1'],
+    ['Waterproofing certs per wet area', 5, 'AS 3740'],
+    ['Energy efficiency final report', 4, 'NCC J1'],
+    ['As-built drawings provided', 3, ''],
+    ['Defect list agreed and dated', 4, ''],
+    ['Site clean, rubbish removed', 2, '']
+  ];
+  ['INTERIOR — ROOM BY ROOM','EXTERIOR','COMPLIANCE DOCUMENTATION'].forEach(grp => {
+    const g = window.INSPECTION_LIBRARY['StagePCI'].groups.find(x => x.name === grp);
+    if (g) g.locations.forEach(l => n += add('StagePCI', grp, l.location, PCI.slice(0, 12)));
+  });
+
+  /* ===== POOL SAFETY ===== */
+  const POOL = [
+    ['Barrier 1200mm verified each section', 5, 'AS 1926.1'],
+    ['Vertical gap ≤ 100mm gauge tested', 5, 'AS 1926.1'],
+    ['Horizontal members 100-900mm — none', 5, 'AS 1926.1'],
+    ['Boundary fence 1800mm if part of barrier', 5, 'AS 1926.1'],
+    ['Gate self-closing 10-cycle test', 5, 'AS 1926.1'],
+    ['Gate self-latching any position', 5, 'AS 1926.1'],
+    ['Gate latch ≥ 1500mm AFFL external', 5, 'AS 1926.1'],
+    ['Gate opens outward from pool', 5, 'AS 1926.1'],
+    ['NCZ external 900mm radius from top', 5, 'AS 1926.1'],
+    ['NCZ internal 300mm radius from top', 5, 'AS 1926.1'],
+    ['No climbable furniture in NCZ', 5, 'AS 1926.1'],
+    ['Tree branches outside NCZ', 4, 'AS 1926.1'],
+    ['Window restrictors pool-facing windows', 5, 'AS 1926.1'],
+    ['Door functions as gate if part of barrier', 5, 'AS 1926.1'],
+    ['CPR sign current and visible', 4, 'AS 1926.1'],
+    ['Pool registered (Form 23) council', 5, 'BR 2018 r147'],
+    ['Pool fence registration current', 5, 'BR 2018'],
+    ['Glass infill safety glass certified', 5, 'AS 1288'],
+    ['Pool lighting bonding AS 3000', 5, 'AS/NZS 3000'],
+    ['Pool surround slip resistance', 4, 'AS 4586'],
+    ['Spa lid lockable if used as barrier', 4, 'AS 1926.3']
+  ];
+  ['BARRIER','DOORS & WINDOWS (where part of barrier)','POOL AREA INSIDE BARRIER','SPA / WATER FEATURES'].forEach(grp => {
+    const g = window.INSPECTION_LIBRARY['PoolSafety'].groups.find(x => x.name === grp);
+    if (g) g.locations.forEach(l => n += add('PoolSafety', grp, l.location, POOL.slice(0, 12)));
+  });
+  ['BARRIER COMPLIANCE','FORM 23 ITEMS'].forEach(grp => {
+    const g = window.INSPECTION_LIBRARY['PoolBarrier'].groups.find(x => x.name === grp);
+    if (g) g.locations.forEach(l => n += add('PoolBarrier', grp, l.location, POOL.slice(0, 12)));
+  });
+
+  /* ===== DILAPIDATION ===== */
+  const DILAP = [
+    ['Photo each elevation high-resolution', 3, ''],
+    ['Macro photos with scale at every crack', 3, 'CSIRO BCC 21'],
+    ['Crack widths measured with crack gauge', 3, 'CSIRO BCC 21'],
+    ['Crack mapping diagram annotated', 3, ''],
+    ['Drum-test pattern mapped', 3, ''],
+    ['Wall straightness measurement', 2, ''],
+    ['Floor levelness with laser', 2, 'GST&T 2.08'],
+    ['Door frame square test', 2, 'GST&T 8.04'],
+    ['Window operation noted each sash', 2, ''],
+    ['Tile lippage and damage mapped', 3, 'GST&T 11.09'],
+    ['Silicone condition photographed', 2, ''],
+    ['Mould/damp staining photo log', 3, ''],
+    ['Slab edge crack widths measured', 4, 'CSIRO BCC 21'],
+    ['Retaining wall lean angle measured', 4, 'AS 4678'],
+    ['Tree proximity to slab measured', 3, 'AS 4373'],
+    ['Existing repairs/patches noted', 2, ''],
+    ['Date-stamped video walkthrough', 4, ''],
+    ['Drone photos for inaccessible areas', 2, ''],
+    ['Triangulation reference points', 3, ''],
+    ['Existing termite damage photo', 4, 'AS 4349.3'],
+    ['Existing rot/water damage', 4, '']
+  ];
+  ['EXTERIOR','INTERIOR','STRUCTURE'].forEach(grp => {
+    const g = window.INSPECTION_LIBRARY['Dilapidation'].groups.find(x => x.name === grp);
+    if (g) g.locations.forEach(l => n += add('Dilapidation', grp, l.location, DILAP.slice(0, 10)));
+  });
+
+  /* ===== RENTAL MINIMUM STD ===== */
+  const RENTAL = [
+    ['Photo all external elevations', 2, ''],
+    ['Photo all room ceilings', 2, ''],
+    ['Damp/mould check all rooms', 4, 'RTR 2021'],
+    ['Mould-free silicone seals', 4, 'RTR 2021'],
+    ['Window operation each sash', 2, ''],
+    ['Window restrictor > 2m AFFL', 5, 'NCC H3D9'],
+    ['Storage capacity adequate', 2, 'RTR 2021 r37'],
+    ['Compliance Cert Electrical Safety current', 5, 'RTR 2021 r47'],
+    ['Gas Safety Check certificate current', 5, 'RTR 2021 r45'],
+    ['Smoke alarm replacement dates', 5, 'AS 3786'],
+    ['Smoke alarm service records', 4, 'AS 3786'],
+    ['RCD test button working', 4, 'AS/NZS 3000'],
+    ['Switchboard labelling current', 2, 'AS/NZS 3000'],
+    ['Hot water service age within service life', 3, ''],
+    ['Tempering valve test record', 5, 'AS 3500.4'],
+    ['Exhaust fan capacity check', 3, 'AS 1668.2'],
+    ['Termite inspection within 12 months', 3, 'AS 4349.3'],
+    ['Cord safety per RTR 2021 r56', 4, 'RTR 2021 r56'],
+    ['Anchor points for blinds', 3, 'AS 4828.2'],
+    ['Ceiling insulation R-value', 3, 'NCC J1'],
+    ['Draught proofing of external doors', 2, '']
+  ];
+  Object.keys(window.INSPECTION_LIBRARY['RentalMinimumStd'].groups || {}).forEach(() => {});
+  window.INSPECTION_LIBRARY['RentalMinimumStd'].groups.forEach(g => {
+    g.locations.forEach(l => n += add('RentalMinimumStd', g.name, l.location, RENTAL.slice(0, 8)));
+  });
+  window.INSPECTION_LIBRARY['RentalStandards'].groups.forEach(g => {
+    g.locations.forEach(l => n += add('RentalStandards', g.name, l.location, RENTAL.slice(0, 8)));
+  });
+
+  /* ===== AS-BUILT / ILLEGAL ===== */
+  const ASBUILT = [
+    ['Council records search performed', 4, 'Building Act 1993'],
+    ['Title plan vs as-built measurement', 4, ''],
+    ['Previous building permit history', 4, 'BR 2018'],
+    ['Trade certificates available', 3, ''],
+    ['Owner-builder education cert', 3, ''],
+    ['Floor space ratio check', 3, 'BR 2018'],
+    ['Building height limits', 4, 'BR 2018'],
+    ['Side & rear setbacks per overlay', 4, 'BR 2018 r79'],
+    ['Window overlooking analysis', 4, 'BR 2018 r84'],
+    ['Daylight to living areas Reg 86', 4, 'BR 2018 r86'],
+    ['Engineering analysis required', 5, ''],
+    ['Tie-down system inspection', 5, 'AS 1684'],
+    ['Bracing inspection', 5, 'AS 1684'],
+    ['Hidden defect potential', 4, ''],
+    ['Termite risk for hidden timber', 4, 'AS 3660.1'],
+    ['Smoke alarm placement compliant', 5, 'BR 2018 r110'],
+    ['Glazing safety glass AS 1288', 5, 'AS 1288'],
+    ['Stair / balustrade compliance', 5, 'NCC D2D17/18'],
+    ['Insulation R-values', 3, 'NCC J1']
+  ];
+  window.INSPECTION_LIBRARY['AsBuiltIllegal'].groups.forEach(g => {
+    g.locations.forEach(l => n += add('AsBuiltIllegal', g.name, l.location, ASBUILT.slice(0, 10)));
+  });
+
+  /* ===== SPECIAL PURPOSE ===== */
+  const SPECIAL = [
+    ['Reference scale in every photo', 4, ''],
+    ['Date/time-stamped video walkthrough', 4, ''],
+    ['Drone footage for elevations', 3, ''],
+    ['Thermal imaging if useful', 2, ''],
+    ['Moisture meter readings', 3, ''],
+    ['Triangulation of measurement points', 3, ''],
+    ['Comparable case law referenced', 3, ''],
+    ['VBA / VCAT precedents noted', 3, ''],
+    ['GST&T 2015 cited', 4, ''],
+    ['Manufacturer specifications cited', 3, ''],
+    ['Executive summary 1 page', 4, ''],
+    ['Recommendations prioritised by severity', 5, ''],
+    ['Appendix of evidence indexed', 4, ''],
+    ['Limitations explicit', 5, ''],
+    ['Signed and dated by inspector', 5, '']
+  ];
+  window.INSPECTION_LIBRARY['SpecialPurpose'].groups.forEach(g => {
+    g.locations.forEach(l => n += add('SpecialPurpose', g.name, l.location, SPECIAL.slice(0, 8)));
+  });
+
+  /* ===== AESMR ===== */
+  const AESMR = [
+    ['Logbook entries last 12 months', 5, 'AS 1851'],
+    ['Battery age recorded per fitting', 4, 'AS 2293.2'],
+    ['Emergency lighting circuit independent', 4, 'AS 2293.2'],
+    ['Extinguisher Class A B E F present', 4, 'AS 2444'],
+    ['Extinguisher pressure gauge in green', 4, 'AS 1851'],
+    ['Hose reel rubber condition', 3, 'AS 1851'],
+    ['Hose reel pressure tested annually', 5, 'AS 1851'],
+    ['Sprinkler head spacing per drawing', 5, 'AS 2118'],
+    ['Sprinkler control valve seals intact', 5, 'AS 2118'],
+    ['Booster cabinet signage and access', 4, 'AS 2419'],
+    ['Fire panel event log reviewed', 5, 'AS 1851'],
+    ['Smoke detectors cleaning records', 3, 'AS 1851'],
+    ['Fire panel battery age each panel', 5, 'AS 1851'],
+    ['Fire door tag visible and current', 5, 'AS 1851'],
+    ['Fire door smoke seal condition', 4, 'AS 1905.1'],
+    ['Fire door self-closer torque', 4, 'AS 1905.1'],
+    ['Exit pathway minimum width', 4, 'NCC D1'],
+    ['Travel distance compliance', 4, 'NCC D1'],
+    ['Final exit clear of obstructions', 5, 'NCC D2'],
+    ['Smoke control fan operation', 5, 'AS 1668.1'],
+    ['Stair pressurisation operation', 5, 'AS 1668.1'],
+    ['Smoke damper annual test', 5, 'AS 1851'],
+    ['Lift emergency communication test', 5, 'AS 1735'],
+    ['Lift firefighter mode test', 5, 'AS 1735'],
+    ['Building owner ESM obligations noted', 4, 'BR 2018 r217'],
+    ['Non-conformances tracked and closed', 5, ''],
+    ['AESMR issued and signed', 5, 'BR 2018 r223']
+  ];
+  window.INSPECTION_LIBRARY['AESMR'].groups.forEach(g => {
+    g.locations.forEach(l => n += add('AESMR', g.name, l.location, AESMR.slice(0, 8)));
+  });
+
+  console.log('[Phase P Comprehensive Expansion] Added ' + n + ' deep-checklist items across libraries.');
+})();
 
 
 console.log("[Phase P] Loaded: " + Object.keys(INSPECTION_LIBRARY).length + " inspection libraries");
