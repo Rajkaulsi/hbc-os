@@ -20698,6 +20698,817 @@ window.mbJumpToDesktopTab = function(tabId) {
 console.log('[Phase N Part A] Mobile-native Documents+AI screen + Consultant menu loaded');
 
 
+
+/* ============================================================
+   PHASE O — NAV + LOAD + CLOUD + AI KEYS MOBILE + CHECKLISTS
+   ============================================================ */
+
+/* =========================================================
+   1. NAVIGATION HISTORY (back/forward)
+   ========================================================= */
+window.MOBILE_NAV_HISTORY = window.MOBILE_NAV_HISTORY || [];
+window.MOBILE_NAV_FORWARD = window.MOBILE_NAV_FORWARD || [];
+
+window.captureNavState = function() {
+  if (!window.MOBILE_STATE) return null;
+  return {
+    activeTab: MOBILE_STATE.activeTab,
+    activeSection: MOBILE_STATE.activeSection,
+    expandedItem: MOBILE_STATE.expandedItem,
+    jobId: (typeof getActiveJobId === 'function') ? getActiveJobId() : null,
+    ts: Date.now()
+  };
+};
+
+window.pushNavState = function() {
+  const state = captureNavState();
+  if (!state) return;
+  const last = MOBILE_NAV_HISTORY[MOBILE_NAV_HISTORY.length - 1];
+  if (last && last.activeTab === state.activeTab && last.activeSection === state.activeSection && last.jobId === state.jobId) return;
+  MOBILE_NAV_HISTORY.push(state);
+  if (MOBILE_NAV_HISTORY.length > 50) MOBILE_NAV_HISTORY.shift();
+  MOBILE_NAV_FORWARD = [];
+};
+
+window.applyNavState = function(state) {
+  if (!state || !window.MOBILE_STATE) return;
+  const currentJobId = (typeof getActiveJobId === 'function') ? getActiveJobId() : null;
+  if (state.jobId && state.jobId !== currentJobId && typeof loadJobIntoProject === 'function') {
+    try { loadJobIntoProject(state.jobId); } catch(e) { console.warn(e); }
+  }
+  MOBILE_STATE.activeTab = state.activeTab;
+  MOBILE_STATE.activeSection = state.activeSection;
+  MOBILE_STATE.expandedItem = state.expandedItem;
+  if (typeof renderMobilePage === 'function') renderMobilePage();
+};
+
+window.navBack = function() {
+  if (typeof haptic === 'function') haptic(8);
+  if (!MOBILE_NAV_HISTORY.length) { if (typeof showToast === 'function') showToast('No history', 'warn'); return; }
+  const current = captureNavState();
+  if (current) MOBILE_NAV_FORWARD.push(current);
+  applyNavState(MOBILE_NAV_HISTORY.pop());
+};
+
+window.navForward = function() {
+  if (typeof haptic === 'function') haptic(8);
+  if (!MOBILE_NAV_FORWARD.length) { if (typeof showToast === 'function') showToast('No forward', 'warn'); return; }
+  const current = captureNavState();
+  if (current) MOBILE_NAV_HISTORY.push(current);
+  applyNavState(MOBILE_NAV_FORWARD.pop());
+};
+
+/* Hook nav captures */
+(function hookNavCapture() {
+  ['mbSwitchTab','mbOpenSection','mbOpenJob','mbBackToSections','mbOpenConsultantTab'].forEach(fnName => {
+    if (typeof window[fnName] === 'function') {
+      const orig = window[fnName];
+      window[fnName] = function() { pushNavState(); return orig.apply(this, arguments); };
+    }
+  });
+})();
+
+/* Floating back/forward buttons */
+(function injectNavButtons() {
+  const inject = function() {
+    if (document.getElementById('hbcNavBack')) return;
+    const style = document.createElement('style');
+    style.textContent = `
+      #hbcNavBack, #hbcNavFwd {
+        position: fixed;
+        top: 50%;
+        transform: translateY(-50%);
+        z-index: 99990;
+        background: rgba(13,27,42,.88);
+        color: #fff;
+        border: 2px solid rgba(255,255,255,.2);
+        border-radius: 50%;
+        width: 38px;
+        height: 38px;
+        font-size: 18px;
+        font-weight: 700;
+        cursor: pointer;
+        display: none;
+        align-items: center;
+        justify-content: center;
+        box-shadow: 0 4px 12px rgba(0,0,0,.3);
+        -webkit-tap-highlight-color: transparent;
+      }
+      #hbcNavBack { left: 2px; }
+      #hbcNavFwd { right: 2px; }
+      body.mobile-mode #hbcNavBack.has-history { display: flex; }
+      body.mobile-mode #hbcNavFwd.has-forward { display: flex; }
+      #hbcNavBack:active, #hbcNavFwd:active { background: #1e293b; transform: translateY(-50%) scale(.9); }
+    `;
+    document.head.appendChild(style);
+    
+    const back = document.createElement('button');
+    back.id = 'hbcNavBack';
+    back.innerHTML = '‹';
+    back.onclick = navBack;
+    back.setAttribute('aria-label', 'Back');
+    document.body.appendChild(back);
+    
+    const fwd = document.createElement('button');
+    fwd.id = 'hbcNavFwd';
+    fwd.innerHTML = '›';
+    fwd.onclick = navForward;
+    fwd.setAttribute('aria-label', 'Forward');
+    document.body.appendChild(fwd);
+    
+    setInterval(() => {
+      back.classList.toggle('has-history', MOBILE_NAV_HISTORY.length > 0);
+      fwd.classList.toggle('has-forward', MOBILE_NAV_FORWARD.length > 0);
+    }, 500);
+  };
+  
+  if (document.readyState === 'complete' || document.readyState === 'interactive') {
+    setTimeout(inject, 300);
+  } else {
+    window.addEventListener('load', () => setTimeout(inject, 300));
+  }
+})();
+
+/* =========================================================
+   2. LOAD JOBS UI
+   ========================================================= */
+window.mbOpenLoadJobs = function() {
+  if (typeof haptic === 'function') haptic(8);
+  let html = '<p style="font-size:13px;color:#64748b;margin-bottom:14px">Load a saved job, import from a file, or sync from cloud.</p>';
+  
+  html += '<button onclick="mbImportJobJSON();mbCloseSheet()" style="display:flex;align-items:center;gap:10px;width:100%;background:#0D1B2A;color:#fff;border:none;border-radius:10px;padding:14px;margin-bottom:8px;font-size:14px;font-weight:700;cursor:pointer">';
+  html += '<span style="font-size:20px">📥</span><span>Import job from file</span></button>';
+  
+  html += '<button onclick="mbCloseSheet();setTimeout(mbOpenCloudSync,200)" style="display:flex;align-items:center;gap:10px;width:100%;background:#4285F4;color:#fff;border:none;border-radius:10px;padding:14px;margin-bottom:12px;font-size:14px;font-weight:700;cursor:pointer">';
+  html += '<span style="font-size:20px">☁️</span><span>Sync with Google Drive</span></button>';
+  
+  html += '<div style="font-size:11px;color:#64748b;font-weight:700;text-transform:uppercase;letter-spacing:.5px;margin:10px 0 8px">Saved on this device</div>';
+  
+  const idx = (typeof getJobsIndex === 'function') ? getJobsIndex() : [];
+  if (!idx.length) {
+    html += '<div style="text-align:center;padding:30px 20px;color:#94a3b8;background:#f6f8fa;border-radius:10px"><div style="font-size:36px;margin-bottom:8px">💾</div><p style="font-size:12px;margin:0">No saved jobs yet.</p><p style="font-size:11px;margin:4px 0 0">Create a new job or import.</p></div>';
+  } else {
+    idx.forEach(j => {
+      const updated = j.updatedAt ? new Date(j.updatedAt).toLocaleDateString('en-AU', {day:'numeric',month:'short',year:'numeric'}) : 'unknown';
+      const safeId = j.id.replace(/'/g, "\\'");
+      html += '<button onclick="mbLoadJob(\'' + safeId + '\')" style="display:flex;align-items:center;gap:10px;width:100%;background:#fff;border:1.5px solid #e5e7eb;border-radius:10px;padding:12px;margin-bottom:6px;cursor:pointer;text-align:left">';
+      html += '<span style="font-size:20px;flex-shrink:0">📁</span>';
+      html += '<div style="flex:1;min-width:0">';
+      html += '<div style="font-size:13px;font-weight:700;color:#0D1B2A;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">' + esc(j.clientName || 'Untitled') + '</div>';
+      html += '<div style="font-size:11px;color:#64748b;margin-top:2px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">' + esc(j.address || '') + '</div>';
+      html += '<div style="font-size:10px;color:#94a3b8;margin-top:2px">Updated ' + updated + '</div></div>';
+      html += '<span style="color:#F05A28;font-size:18px">›</span></button>';
+    });
+  }
+  
+  if (typeof mbBottomSheet === 'function') mbBottomSheet('📂 Load Job', html);
+};
+
+window.mbLoadJob = function(jobId) {
+  if (typeof haptic === 'function') haptic([10,30,10]);
+  if (typeof loadJobIntoProject === 'function') loadJobIntoProject(jobId);
+  else if (typeof setActiveJobId === 'function') setActiveJobId(jobId);
+  if (typeof mbCloseSheet === 'function') mbCloseSheet();
+  if (typeof showToast === 'function') showToast('✓ Job loaded', 'ok');
+  if (window.MOBILE_STATE) MOBILE_STATE.activeTab = 'dashboard';
+  if (typeof renderMobilePage === 'function') renderMobilePage();
+};
+
+/* Inject Load Jobs button into Jobs tab */
+(function addLoadJobToJobsTab() {
+  const orig = window.renderMobileJobsList;
+  if (typeof orig !== 'function') return;
+  window.renderMobileJobsList = function() {
+    let html = orig.apply(this, arguments);
+    const loadBtn = '<button onclick="mbOpenLoadJobs()" style="display:flex;align-items:center;justify-content:center;gap:8px;width:100%;background:#fff;color:#0D1B2A;border:1.5px solid #0D1B2A;border-radius:10px;padding:12px;margin-bottom:10px;font-size:13px;font-weight:700;cursor:pointer">' +
+      '<span style="font-size:16px">📂</span><span>Load saved / Import / Cloud</span></button>';
+    const closeH1 = html.indexOf('</h1>');
+    if (closeH1 > 0) html = html.slice(0, closeH1 + 5) + loadBtn + html.slice(closeH1 + 5);
+    else html = loadBtn + html;
+    return html;
+  };
+})();
+
+/* =========================================================
+   3. GOOGLE DRIVE SYNC
+   ========================================================= */
+window.HBC_GDRIVE = window.HBC_GDRIVE || { token: null, tokenExpiresAt: 0, folderId: null, folderName: 'HBC OS Jobs' };
+
+window.mbOpenCloudSync = function() {
+  if (typeof haptic === 'function') haptic(8);
+  const settings = (PROJECT.settings && PROJECT.settings.gdrive) || {};
+  const clientId = settings.clientId || '';
+  const connected = !!HBC_GDRIVE.token && HBC_GDRIVE.tokenExpiresAt > Date.now();
+  
+  let html = '<p style="font-size:13px;color:#64748b;margin-bottom:14px">Sync jobs to your Google Drive. Files saved to a "HBC OS Jobs" folder.</p>';
+  
+  if (!clientId) {
+    html += '<div style="background:#fff7ed;border:1.5px solid #fed7aa;border-radius:10px;padding:12px;margin-bottom:14px">';
+    html += '<div style="font-weight:700;color:#9a3412;margin-bottom:6px;font-size:12px">⚠️ Setup needed (one time)</div>';
+    html += '<div style="font-size:11px;color:#9a3412;line-height:1.6">' +
+      '1. Visit <a href="https://console.cloud.google.com/apis/credentials" target="_blank" style="color:#0D1B2A;font-weight:700">console.cloud.google.com/apis/credentials</a><br>' +
+      '2. Create OAuth Client ID → Web Application<br>' +
+      '3. Authorized JS origin: <code style="background:#fff;padding:2px 4px;border-radius:3px;font-size:10px">https://rajkaulsi.github.io</code><br>' +
+      '4. Enable <a href="https://console.cloud.google.com/apis/library/drive.googleapis.com" target="_blank" style="color:#0D1B2A;font-weight:700">Google Drive API</a><br>' +
+      '5. Paste Client ID below' +
+    '</div></div>';
+  }
+  
+  html += '<div style="margin-bottom:14px">';
+  html += '<label style="font-size:11px;color:#64748b;font-weight:700;text-transform:uppercase;letter-spacing:.5px;display:block;margin-bottom:4px">Google OAuth Client ID</label>';
+  html += '<input id="gdClientId" placeholder="123...apps.googleusercontent.com" value="' + esc(clientId) + '" style="width:100%;font-size:14px;padding:10px;border:1.5px solid #e5e7eb;border-radius:8px;box-sizing:border-box;font-family:monospace">';
+  html += '<button onclick="mbSaveGDriveSettings()" style="margin-top:6px;width:100%;background:#0D1B2A;color:#fff;border:none;border-radius:8px;padding:10px;font-size:13px;font-weight:700;cursor:pointer">💾 Save Client ID</button>';
+  html += '</div>';
+  
+  if (clientId) {
+    if (connected) {
+      html += '<div style="background:#dcfce7;border:1.5px solid #86efac;border-radius:10px;padding:12px;margin-bottom:12px;text-align:center"><div style="font-weight:700;color:#15803d">✓ Connected</div></div>';
+      html += '<div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:8px">';
+      html += '<button onclick="mbGDriveSyncUp()" style="background:#4285F4;color:#fff;border:none;border-radius:10px;padding:14px;font-size:13px;font-weight:700;cursor:pointer">⬆️ Upload All</button>';
+      html += '<button onclick="mbGDriveSyncDown()" style="background:#0D1B2A;color:#fff;border:none;border-radius:10px;padding:14px;font-size:13px;font-weight:700;cursor:pointer">⬇️ Cloud List</button>';
+      html += '</div>';
+      html += '<button onclick="mbGDriveDisconnect()" style="width:100%;background:#fee2e2;color:#991b1b;border:none;border-radius:8px;padding:10px;font-size:12px;font-weight:700;cursor:pointer">Disconnect</button>';
+    } else {
+      html += '<button onclick="mbGDriveConnect()" style="display:flex;align-items:center;justify-content:center;gap:10px;width:100%;background:#4285F4;color:#fff;border:none;border-radius:10px;padding:14px;font-size:14px;font-weight:700;cursor:pointer">';
+      html += '<span style="font-size:20px">🔗</span><span>Connect Google Drive</span></button>';
+    }
+  }
+  
+  if (typeof mbBottomSheet === 'function') mbBottomSheet('☁️ Cloud Sync', html);
+};
+
+window.mbSaveGDriveSettings = function() {
+  const inp = document.getElementById('gdClientId');
+  const clientId = inp ? inp.value.trim() : '';
+  if (!clientId) { showToast('Enter a Client ID', 'warn'); return; }
+  if (!PROJECT.settings) PROJECT.settings = {};
+  if (!PROJECT.settings.gdrive) PROJECT.settings.gdrive = {};
+  PROJECT.settings.gdrive.clientId = clientId;
+  if (typeof saveProject === 'function') saveProject(true);
+  showToast('✓ Saved', 'ok');
+  if (typeof mbCloseSheet === 'function') mbCloseSheet();
+  setTimeout(mbOpenCloudSync, 300);
+};
+
+window.mbGDriveConnect = function() {
+  const clientId = (PROJECT.settings && PROJECT.settings.gdrive && PROJECT.settings.gdrive.clientId);
+  if (!clientId) { showToast('No Client ID set', 'err'); return; }
+  if (typeof haptic === 'function') haptic([10,30,10]);
+  
+  if (typeof google === 'undefined' || !google.accounts) {
+    const s = document.createElement('script');
+    s.src = 'https://accounts.google.com/gsi/client';
+    s.async = true; s.defer = true;
+    s.onload = () => doGDriveOAuth(clientId);
+    s.onerror = () => showToast('Failed to load Google library', 'err');
+    document.head.appendChild(s);
+  } else {
+    doGDriveOAuth(clientId);
+  }
+};
+
+function doGDriveOAuth(clientId) {
+  try {
+    const client = google.accounts.oauth2.initTokenClient({
+      client_id: clientId,
+      scope: 'https://www.googleapis.com/auth/drive.file',
+      callback: (resp) => {
+        if (resp.error) { showToast('OAuth: ' + resp.error, 'err'); return; }
+        HBC_GDRIVE.token = resp.access_token;
+        HBC_GDRIVE.tokenExpiresAt = Date.now() + (resp.expires_in - 60) * 1000;
+        showToast('✓ Connected', 'ok');
+        if (typeof mbCloseSheet === 'function') mbCloseSheet();
+        setTimeout(mbOpenCloudSync, 300);
+      }
+    });
+    client.requestAccessToken();
+  } catch (err) { showToast('OAuth: ' + err.message.slice(0,80), 'err'); }
+}
+
+window.mbGDriveDisconnect = function() {
+  if (!confirm('Disconnect Google Drive?')) return;
+  HBC_GDRIVE.token = null;
+  HBC_GDRIVE.tokenExpiresAt = 0;
+  HBC_GDRIVE.folderId = null;
+  showToast('✓ Disconnected', 'ok');
+  if (typeof mbCloseSheet === 'function') mbCloseSheet();
+  setTimeout(mbOpenCloudSync, 300);
+};
+
+async function ensureGDriveFolder() {
+  if (HBC_GDRIVE.folderId) return HBC_GDRIVE.folderId;
+  const search = await fetch('https://www.googleapis.com/drive/v3/files?q=' + encodeURIComponent("name='" + HBC_GDRIVE.folderName + "' and mimeType='application/vnd.google-apps.folder' and trashed=false"), {
+    headers: { Authorization: 'Bearer ' + HBC_GDRIVE.token }
+  });
+  const sres = await search.json();
+  if (sres.files && sres.files.length) { HBC_GDRIVE.folderId = sres.files[0].id; return HBC_GDRIVE.folderId; }
+  const create = await fetch('https://www.googleapis.com/drive/v3/files', {
+    method: 'POST',
+    headers: { Authorization: 'Bearer ' + HBC_GDRIVE.token, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ name: HBC_GDRIVE.folderName, mimeType: 'application/vnd.google-apps.folder' })
+  });
+  const cres = await create.json();
+  HBC_GDRIVE.folderId = cres.id;
+  return cres.id;
+}
+
+window.mbGDriveSyncUp = async function() {
+  if (!HBC_GDRIVE.token) { showToast('Not connected', 'err'); return; }
+  showToast('⬆️ Uploading...', 'ok');
+  try {
+    const folderId = await ensureGDriveFolder();
+    /* Upload current project (active job) for now */
+    const payload = { _format: 'HBC_OS_JOB', _version: 1, _exportedAt: new Date().toISOString(), job: JSON.parse(JSON.stringify(PROJECT)) };
+    const content = JSON.stringify(payload);
+    const clientName = (PROJECT.client && PROJECT.client.name) ? PROJECT.client.name.replace(/[^a-z0-9]/gi, '_') : 'job';
+    const filename = 'HBC_' + clientName + '_' + (PROJECT.id || 'NEW') + '.json';
+    await uploadDriveFile(folderId, filename, content);
+    showToast('✓ Uploaded current job', 'ok');
+  } catch (err) {
+    showToast('Upload failed: ' + err.message.slice(0,80), 'err');
+  }
+};
+
+async function uploadDriveFile(folderId, filename, content) {
+  const search = await fetch('https://www.googleapis.com/drive/v3/files?q=' + encodeURIComponent("name='" + filename + "' and '" + folderId + "' in parents and trashed=false"), {
+    headers: { Authorization: 'Bearer ' + HBC_GDRIVE.token }
+  });
+  const sres = await search.json();
+  const existingId = sres.files && sres.files[0] && sres.files[0].id;
+  const metadata = { name: filename, parents: existingId ? undefined : [folderId] };
+  const boundary = '-------hbc' + Date.now();
+  const body = '--' + boundary + '\r\nContent-Type: application/json\r\n\r\n' + JSON.stringify(metadata) +
+    '\r\n--' + boundary + '\r\nContent-Type: application/json\r\n\r\n' + content +
+    '\r\n--' + boundary + '--';
+  const url = existingId ? 'https://www.googleapis.com/upload/drive/v3/files/' + existingId + '?uploadType=multipart'
+    : 'https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart';
+  return fetch(url, {
+    method: existingId ? 'PATCH' : 'POST',
+    headers: { Authorization: 'Bearer ' + HBC_GDRIVE.token, 'Content-Type': 'multipart/related; boundary=' + boundary },
+    body: body
+  });
+}
+
+window.mbGDriveSyncDown = async function() {
+  if (!HBC_GDRIVE.token) { showToast('Not connected', 'err'); return; }
+  showToast('⬇️ Fetching list...', 'ok');
+  try {
+    const folderId = await ensureGDriveFolder();
+    const list = await fetch('https://www.googleapis.com/drive/v3/files?q=' + encodeURIComponent("'" + folderId + "' in parents and trashed=false") + '&fields=files(id,name,modifiedTime)', {
+      headers: { Authorization: 'Bearer ' + HBC_GDRIVE.token }
+    });
+    const lres = await list.json();
+    const files = lres.files || [];
+    if (!files.length) { showToast('No cloud jobs', 'warn'); return; }
+    
+    let html = '<p style="font-size:13px;color:#64748b;margin-bottom:14px">Pick a job to download:</p>';
+    files.forEach(f => {
+      const safeId = f.id.replace(/'/g, "\\'");
+      const modified = f.modifiedTime ? new Date(f.modifiedTime).toLocaleString('en-AU', {day:'numeric',month:'short',hour:'numeric',minute:'2-digit'}) : '';
+      html += '<button onclick="mbGDriveDownload(\'' + safeId + '\')" style="display:flex;align-items:center;gap:10px;width:100%;background:#fff;border:1.5px solid #e5e7eb;border-radius:10px;padding:12px;margin-bottom:6px;cursor:pointer;text-align:left">';
+      html += '<span style="font-size:18px">☁️</span>';
+      html += '<div style="flex:1;min-width:0">';
+      html += '<div style="font-size:12px;font-weight:600;color:#0D1B2A;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">' + esc(f.name) + '</div>';
+      html += '<div style="font-size:10px;color:#94a3b8">' + esc(modified) + '</div></div>';
+      html += '<span style="color:#F05A28">›</span></button>';
+    });
+    if (typeof mbBottomSheet === 'function') mbBottomSheet('☁️ Cloud Jobs', html);
+  } catch (err) { showToast('Sync failed: ' + err.message.slice(0,80), 'err'); }
+};
+
+window.mbGDriveDownload = async function(fileId) {
+  try {
+    const r = await fetch('https://www.googleapis.com/drive/v3/files/' + fileId + '?alt=media', {
+      headers: { Authorization: 'Bearer ' + HBC_GDRIVE.token }
+    });
+    const text = await r.text();
+    const payload = JSON.parse(text);
+    if (!payload._format || payload._format !== 'HBC_OS_JOB' || !payload.job) {
+      showToast('Invalid file', 'err'); return;
+    }
+    const job = payload.job;
+    job.id = 'JOB_' + Date.now().toString(36) + '_cloud';
+    job.updatedAt = Date.now();
+    if (typeof saveJobToIDB === 'function') {
+      await saveJobToIDB(job);
+      const idx = (typeof getJobsIndex === 'function') ? getJobsIndex() : [];
+      idx.unshift({ id: job.id, clientName: (job.client && job.client.name) || 'Cloud job', address: (job.client && job.client.address) || '', updatedAt: Date.now() });
+      if (typeof setJobsIndex === 'function') setJobsIndex(idx);
+    }
+    showToast('✓ Downloaded', 'ok');
+    if (typeof mbCloseSheet === 'function') mbCloseSheet();
+    if (typeof renderMobilePage === 'function') renderMobilePage();
+  } catch (err) { showToast('Download: ' + err.message.slice(0,80), 'err'); }
+};
+
+/* =========================================================
+   4. AI API KEYS ON MOBILE
+   ========================================================= */
+window.mbOpenAIKeys = function() {
+  if (typeof haptic === 'function') haptic(8);
+  if (!PROJECT.settings) PROJECT.settings = {};
+  if (!PROJECT.settings.ai) PROJECT.settings.ai = {};
+  const ai = PROJECT.settings.ai;
+  if (!ai.google) ai.google = {};
+  if (!ai.claude) ai.claude = {};
+  if (!ai.chatgpt) ai.chatgpt = {};
+  
+  let html = '<p style="font-size:13px;color:#64748b;margin-bottom:14px">Paste your AI API keys. Each provider needs its own key. Keys are saved locally on this device.</p>';
+  
+  /* Gemini */
+  html += '<div style="background:#fff;border:1.5px solid #e5e7eb;border-radius:10px;padding:12px;margin-bottom:10px">';
+  html += '<div style="display:flex;align-items:center;gap:8px;margin-bottom:8px">';
+  html += '<span style="font-size:20px">🔮</span>';
+  html += '<div style="flex:1"><div style="font-weight:700;color:#0D1B2A;font-size:14px">Google Gemini</div>';
+  html += '<div style="font-size:10px;color:#64748b">Free tier available · <a href="https://aistudio.google.com/apikey" target="_blank" style="color:#4285F4">Get key</a></div></div>';
+  html += '<span style="font-size:11px;font-weight:700;color:' + (ai.google.key ? '#15803d' : '#94a3b8') + '">' + (ai.google.key ? '● SET' : '○ Empty') + '</span>';
+  html += '</div>';
+  html += '<input id="aiKeyGoogle" type="password" placeholder="AIzaSy..." value="' + esc(ai.google.key || '') + '" style="width:100%;font-size:13px;padding:9px;border:1.5px solid #e5e7eb;border-radius:6px;box-sizing:border-box;font-family:monospace">';
+  html += '<select id="aiModelGoogle" style="width:100%;font-size:13px;padding:9px;border:1.5px solid #e5e7eb;border-radius:6px;margin-top:6px;background:#fff">';
+  ['gemini-2.0-flash','gemini-1.5-flash-latest','gemini-1.5-pro-latest','Gemini 2.5 Flash','Gemini 2.0 Flash','Gemini 1.5 Pro'].forEach(m => {
+    html += '<option ' + (ai.google.model===m?'selected':'') + '>' + m + '</option>';
+  });
+  html += '</select>';
+  html += '</div>';
+  
+  /* Claude */
+  html += '<div style="background:#fff;border:1.5px solid #e5e7eb;border-radius:10px;padding:12px;margin-bottom:10px">';
+  html += '<div style="display:flex;align-items:center;gap:8px;margin-bottom:8px">';
+  html += '<span style="font-size:20px">🪶</span>';
+  html += '<div style="flex:1"><div style="font-weight:700;color:#0D1B2A;font-size:14px">Anthropic Claude</div>';
+  html += '<div style="font-size:10px;color:#64748b">Paid · <a href="https://console.anthropic.com/settings/keys" target="_blank" style="color:#F05A28">Get key</a></div></div>';
+  html += '<span style="font-size:11px;font-weight:700;color:' + (ai.claude.key ? '#15803d' : '#94a3b8') + '">' + (ai.claude.key ? '● SET' : '○ Empty') + '</span>';
+  html += '</div>';
+  html += '<input id="aiKeyClaude" type="password" placeholder="sk-ant-..." value="' + esc(ai.claude.key || '') + '" style="width:100%;font-size:13px;padding:9px;border:1.5px solid #e5e7eb;border-radius:6px;box-sizing:border-box;font-family:monospace">';
+  html += '<select id="aiModelClaude" style="width:100%;font-size:13px;padding:9px;border:1.5px solid #e5e7eb;border-radius:6px;margin-top:6px;background:#fff">';
+  ['Claude Sonnet','Claude Opus','Claude Haiku','claude-sonnet-4-5-20250929'].forEach(m => {
+    html += '<option ' + (ai.claude.model===m?'selected':'') + '>' + m + '</option>';
+  });
+  html += '</select>';
+  html += '</div>';
+  
+  /* OpenAI */
+  html += '<div style="background:#fff;border:1.5px solid #e5e7eb;border-radius:10px;padding:12px;margin-bottom:14px">';
+  html += '<div style="display:flex;align-items:center;gap:8px;margin-bottom:8px">';
+  html += '<span style="font-size:20px">🤖</span>';
+  html += '<div style="flex:1"><div style="font-weight:700;color:#0D1B2A;font-size:14px">OpenAI ChatGPT</div>';
+  html += '<div style="font-size:10px;color:#64748b">Paid · <a href="https://platform.openai.com/api-keys" target="_blank" style="color:#10B981">Get key</a></div></div>';
+  html += '<span style="font-size:11px;font-weight:700;color:' + (ai.chatgpt.key ? '#15803d' : '#94a3b8') + '">' + (ai.chatgpt.key ? '● SET' : '○ Empty') + '</span>';
+  html += '</div>';
+  html += '<input id="aiKeyChatgpt" type="password" placeholder="sk-..." value="' + esc(ai.chatgpt.key || '') + '" style="width:100%;font-size:13px;padding:9px;border:1.5px solid #e5e7eb;border-radius:6px;box-sizing:border-box;font-family:monospace">';
+  html += '<select id="aiModelChatgpt" style="width:100%;font-size:13px;padding:9px;border:1.5px solid #e5e7eb;border-radius:6px;margin-top:6px;background:#fff">';
+  ['gpt-4o','gpt-4o-mini','GPT-5','GPT-5.5 Thinking'].forEach(m => {
+    html += '<option ' + (ai.chatgpt.model===m?'selected':'') + '>' + m + '</option>';
+  });
+  html += '</select>';
+  html += '</div>';
+  
+  html += '<div style="display:grid;grid-template-columns:1fr 1fr;gap:8px">';
+  html += '<button onclick="mbSaveAIKeys()" style="background:#0D1B2A;color:#fff;border:none;border-radius:10px;padding:14px;font-size:13px;font-weight:700;cursor:pointer">💾 Save Keys</button>';
+  html += '<button onclick="mbCloseSheet();setTimeout(openAITestDialog,300)" style="background:#F05A28;color:#fff;border:none;border-radius:10px;padding:14px;font-size:13px;font-weight:700;cursor:pointer">🔍 Test</button>';
+  html += '</div>';
+  
+  if (typeof mbBottomSheet === 'function') mbBottomSheet('🔑 AI API Keys', html);
+};
+
+window.mbSaveAIKeys = function() {
+  if (!PROJECT.settings) PROJECT.settings = {};
+  if (!PROJECT.settings.ai) PROJECT.settings.ai = {};
+  const ai = PROJECT.settings.ai;
+  
+  ['Google','Claude','Chatgpt'].forEach(p => {
+    const prov = p.toLowerCase() === 'chatgpt' ? 'chatgpt' : p.toLowerCase();
+    if (!ai[prov]) ai[prov] = {};
+    const keyInp = document.getElementById('aiKey' + p);
+    const modelInp = document.getElementById('aiModel' + p);
+    if (keyInp) ai[prov].key = keyInp.value.trim();
+    if (modelInp) ai[prov].model = modelInp.value;
+  });
+  
+  if (typeof saveProject === 'function') saveProject(true);
+  if (typeof haptic === 'function') haptic([10,30,10]);
+  showToast('✓ Keys saved', 'ok');
+  if (typeof mbCloseSheet === 'function') mbCloseSheet();
+};
+
+/* Inject AI Keys + Cloud + Nav buttons into Mobile Setup tab */
+(function injectMobileSettings() {
+  const orig = window.renderMobileSetup;
+  if (typeof orig !== 'function') return;
+  window.renderMobileSetup = function() {
+    let html = orig.apply(this, arguments);
+    const block = 
+      '<div class="mb-item-card" style="border-left-color:#10B981">' +
+        '<div class="mb-item-cat">🔑 AI API Keys (Gemini / Claude / ChatGPT)</div>' +
+        '<div style="font-size:13px;color:#475569;margin-bottom:8px">Set up your AI API keys on this device. Free Gemini key works for everything.</div>' +
+        '<button class="mb-detail-btn primary" style="width:100%" onclick="mbOpenAIKeys()">🔑 Manage AI Keys</button>' +
+      '</div>' +
+      '<div class="mb-item-card" style="border-left-color:#4285F4">' +
+        '<div class="mb-item-cat">☁️ Cloud Sync (Google Drive)</div>' +
+        '<div style="font-size:13px;color:#475569;margin-bottom:8px">Sync jobs to your Google Drive. Backup, restore, share between devices.</div>' +
+        '<button class="mb-detail-btn primary" style="width:100%;background:#4285F4" onclick="mbOpenCloudSync()">☁️ Cloud Sync Setup</button>' +
+      '</div>';
+    return html + block;
+  };
+})();
+
+/* =========================================================
+   5. FILL EMPTY INSPECTION CHECKLISTS
+   ========================================================= */
+const PHASE_O_TEMPLATE_FILLS = {
+  
+  AsBuiltIllegal: {
+    name: 'As-Built / Illegal Works Inspection',
+    standard: 'Building Act 1993 s261 / NCC / AS series / Building Regulations 2018',
+    scope: 'Inspection of unauthorised or undocumented building work to assess compliance and identify rectification requirements.',
+    sections: [
+      { name: 'WORK IDENTIFICATION', items: [
+        ['Owner statement of works recorded', 'std'],
+        ['Date works carried out (estimated)', 'std'],
+        ['Builder / tradesperson identified', 'comp'],
+        ['Permits issued / not issued', 'std'],
+        ['Class of building affected', 'std'],
+        ['Floor area altered (m²)', 'std'],
+        ['Cost of works estimated', 'std'],
+        ['Insurance implications considered', 'comp']
+      ]},
+      { name: 'STRUCTURAL ASSESSMENT', items: [
+        ['Footing type / depth visible', 'std'],
+        ['Slab thickness adequate', 'std'],
+        ['Bearing capacity sufficient', 'std'],
+        ['Tie-down chain continuous', 'std'],
+        ['Wall framing inspection', 'std'],
+        ['Roof framing inspection', 'std'],
+        ['Structural engineer assessment recommended', 'std'],
+        ['Load path to footings verified', 'std']
+      ]},
+      { name: 'SITING & PLANNING', items: [
+        ['Setbacks measured', 'std'],
+        ['Reg 79 (boundary) compliance', 'std'],
+        ['Reg 80 (site coverage)', 'std'],
+        ['Reg 81 (permeability)', 'std'],
+        ['Reg 84 (overlooking)', 'std'],
+        ['Reg 89 (private open space)', 'std'],
+        ['Easement encroachment', 'std'],
+        ['Title boundary check', 'std']
+      ]},
+      { name: 'COMPLIANCE & STANDARDS', items: [
+        ['NCC compliance — Class 1a/10', 'std'],
+        ['AS 1684 framing compliance', 'std'],
+        ['AS 3740 wet area waterproofing', 'std'],
+        ['AS 3000 electrical safety', 'std'],
+        ['Plumbing AS 3500 compliance', 'std'],
+        ['Energy / Section J or 7-star compliance', 'comp'],
+        ['Fire separation / sound transmission', 'comp']
+      ]},
+      { name: 'RECTIFICATION PATHWAY', items: [
+        ['Building Permit retrospective application required', 'std'],
+        ['Engineer report required', 'std'],
+        ['Demolition / removal required (where non-compliant)', 'std'],
+        ['Compliance Certificate path available', 'std'],
+        ['Owner-builder warranty implications', 'comp'],
+        ['Cost-benefit of rectification estimated', 'comp'],
+        ['Council enforcement status', 'std']
+      ]}
+    ]
+  },
+  
+  RentalMinimumStd: {
+    name: 'Rental Minimum Standards Compliance (Victoria)',
+    standard: 'Residential Tenancies Regulations 2021 r35–r47',
+    scope: 'Inspection against the 14 Prescribed Minimum Standards required for residential rental properties in Victoria from 29 March 2021.',
+    sections: [
+      { name: 'STRUCTURAL & WEATHERPROOFING', items: [
+        ['Property structurally sound', 'std'],
+        ['Roof weatherproof and intact', 'std'],
+        ['Walls weatherproof', 'std'],
+        ['Windows operable and secure', 'std']
+      ]},
+      { name: 'LOCKS & SECURITY', items: [
+        ['External doors deadlocks compliant', 'std'],
+        ['Windows have locks or restrictors where opening', 'std'],
+        ['Letterbox lockable / secure', 'comp']
+      ]},
+      { name: 'KITCHEN', items: [
+        ['Kitchen sink with hot/cold water', 'std'],
+        ['Cooking facilities (stove + oven OR equivalent)', 'std'],
+        ['Bench top minimum 600mm x 300mm', 'std'],
+        ['Connected to power', 'std'],
+        ['Cooktop operational', 'std']
+      ]},
+      { name: 'BATHROOM & TOILET', items: [
+        ['Toilet in separate room or partitioned', 'std'],
+        ['Toilet connected to sewer / approved system', 'std'],
+        ['Shower or bath with hot/cold water', 'std'],
+        ['Wash basin connected to hot/cold water', 'std']
+      ]},
+      { name: 'LAUNDRY', items: [
+        ['Laundry facilities — washtub or connection', 'std'],
+        ['Hot/cold water to laundry', 'std']
+      ]},
+      { name: 'HEATING', items: [
+        ['Fixed heater in main living room', 'std'],
+        ['Heater energy-efficient (rated)', 'std'],
+        ['Heater operational and safe', 'std']
+      ]},
+      { name: 'ELECTRICAL SAFETY', items: [
+        ['RCD (safety switch) on all power circuits', 'std'],
+        ['RCD on lighting circuits', 'std'],
+        ['Switchboard accessible and labelled', 'std'],
+        ['Smoke alarms compliant per AS 3786', 'std'],
+        ['Smoke alarms hardwired or 10-yr lithium', 'std'],
+        ['Smoke alarm in every bedroom (post-2014)', 'std']
+      ]},
+      { name: 'WATER & GAS', items: [
+        ['Drinking water supply available', 'std'],
+        ['Hot water service operational', 'std'],
+        ['Hot water tempered to 50°C max at outlets used for personal hygiene', 'std'],
+        ['Gas safety check (every 2 years if gas)', 'std'],
+        ['Electrical safety check (every 2 years)', 'std']
+      ]},
+      { name: 'VENTILATION & LIGHTING', items: [
+        ['Each room has natural or mechanical ventilation', 'std'],
+        ['Bathroom / WC ventilation working', 'std'],
+        ['Each room has adequate lighting (natural or artificial)', 'std']
+      ]},
+      { name: 'VERMIN-PROOF / MOULD', items: [
+        ['Property free of mould / damp', 'std'],
+        ['Vermin-proof — no holes / gaps allowing entry', 'std']
+      ]},
+      { name: 'WINDOW COVERINGS', items: [
+        ['Window coverings in bedrooms and living', 'std'],
+        ['Window coverings opaque (privacy)', 'std']
+      ]}
+    ]
+  },
+  
+  SpecialPurpose: {
+    name: 'Special Purpose Inspection',
+    standard: 'Custom — per agreed scope of works',
+    scope: 'Inspection conducted for a specific client purpose — e.g. insurance claim, expert witness, builder dispute, pre-auction, post-storm damage. Scope agreed in writing prior to inspection.',
+    sections: [
+      { name: 'ENGAGEMENT & SCOPE', items: [
+        ['Engagement letter signed', 'std'],
+        ['Scope of works defined in writing', 'std'],
+        ['Client purpose recorded', 'std'],
+        ['Limitations agreed in advance', 'std'],
+        ['Fee structure documented', 'std'],
+        ['Indemnity insurance current', 'std']
+      ]},
+      { name: 'INSPECTION FOCUS AREAS', items: [
+        ['Specific defects identified by client', 'std'],
+        ['Photographs of defects with measurements', 'std'],
+        ['Witness statements (if applicable)', 'comp'],
+        ['Date / time stamps on all evidence', 'std'],
+        ['Adjacent property photos (if relevant)', 'comp']
+      ]},
+      { name: 'TECHNICAL ASSESSMENT', items: [
+        ['Relevant Australian Standards cited', 'std'],
+        ['NCC clauses identified', 'std'],
+        ['Building Regulations referenced', 'std'],
+        ['Industry guides referenced (e.g. Guide to Standards & Tolerances)', 'std'],
+        ['Specialist engineer involvement recommended', 'comp']
+      ]},
+      { name: 'INSURANCE / DISPUTE CONTEXT', items: [
+        ['Insurance policy reference (if relevant)', 'comp'],
+        ['Date of loss / incident recorded', 'comp'],
+        ['Pre-existing condition noted', 'comp'],
+        ['Causation assessed', 'std'],
+        ['Probable cause expert opinion', 'std']
+      ]},
+      { name: 'REPORT OUTPUTS', items: [
+        ['Findings table with severity', 'std'],
+        ['Recommended action for each defect', 'std'],
+        ['Cost estimate range (if requested)', 'comp'],
+        ['Photographic evidence indexed', 'std'],
+        ['Expert opinion summary', 'std'],
+        ['Limitations / qualifications section', 'std'],
+        ['Sign-off + credentials', 'std']
+      ]}
+    ]
+  },
+  
+  AESMR: {
+    name: 'Annual Essential Safety Measures Report (AESMR)',
+    standard: 'Building Regulations 2018 Part 12 / r217 / r223',
+    scope: 'Annual inspection of essential safety measures in Class 2-9 buildings (commercial, multi-residential). Confirms each ESM is being maintained per its required frequency.',
+    sections: [
+      { name: 'BUILDING IDENTIFICATION', items: [
+        ['Property address verified', 'std'],
+        ['Occupancy Permit / certificate of occupancy', 'std'],
+        ['Building class identified (Class 2-9)', 'std'],
+        ['Effective height recorded', 'std'],
+        ['Building owner / agent recorded', 'std']
+      ]},
+      { name: 'EMERGENCY LIGHTING & EXIT SIGNS', items: [
+        ['Emergency lighting operational (AS 2293.2)', 'std'],
+        ['6-monthly discharge test logbook', 'std'],
+        ['Exit signs illuminated and visible', 'std'],
+        ['Emergency lighting maintenance frequency met', 'std'],
+        ['All emergency lights working', 'std']
+      ]},
+      { name: 'FIRE EXTINGUISHERS & HOSE REELS', items: [
+        ['Portable extinguishers serviced per AS 1851', 'std'],
+        ['Service tags current (6 months)', 'std'],
+        ['Fire hose reels serviced per AS 1851', 'std'],
+        ['Hose reel discharge tested annually', 'std'],
+        ['Fire blankets in kitchen areas current', 'std']
+      ]},
+      { name: 'FIRE HYDRANTS & SPRINKLERS', items: [
+        ['Fire hydrant booster accessible', 'std'],
+        ['Fire hydrant flow tested annually', 'std'],
+        ['Sprinkler system pressure logged', 'std'],
+        ['Sprinkler control valves accessible', 'std'],
+        ['Sprinkler system AS 1851 servicing current', 'std']
+      ]},
+      { name: 'FIRE DETECTION & ALARM', items: [
+        ['Fire panel operational (no faults)', 'std'],
+        ['Smoke detectors functional', 'std'],
+        ['Heat detectors functional', 'std'],
+        ['Fire panel battery backup tested', 'std'],
+        ['AS 1851 servicing — annual + 5-yearly', 'std'],
+        ['Connection to ESA monitoring confirmed', 'std']
+      ]},
+      { name: 'FIRE DOORS & EXIT DOORS', items: [
+        ['Fire doors self-closing', 'std'],
+        ['Fire doors with current tags', 'std'],
+        ['Fire door seals intact', 'std'],
+        ['Exit doors open in direction of travel', 'std'],
+        ['Exit hardware operational', 'std'],
+        ['Path of travel clear', 'std']
+      ]},
+      { name: 'STAIRS, BALUSTRADES & HANDRAILS', items: [
+        ['Stairs structurally sound', 'std'],
+        ['Balustrades at compliant height (1m / 865mm)', 'std'],
+        ['Handrails fitted both sides where required', 'std'],
+        ['No gaps > 125mm in balustrades', 'std'],
+        ['Stair nosing visibility maintained', 'comp']
+      ]},
+      { name: 'MECHANICAL VENTILATION', items: [
+        ['Smoke control fans operational', 'std'],
+        ['Stair pressurisation operational', 'std'],
+        ['Air handling units serviced (AS 1851 / AS 1668)', 'std'],
+        ['Smoke dampers tested annually', 'std']
+      ]},
+      { name: 'LIFTS', items: [
+        ['Lift emergency communication operational', 'std'],
+        ['Lift maintenance current', 'std'],
+        ['Firefighter lift functional (where applicable)', 'std']
+      ]},
+      { name: 'LOGBOOK & DOCUMENTATION', items: [
+        ['Essential Safety Measures Logbook on site', 'std'],
+        ['All maintenance records up to date', 'std'],
+        ['Previous AESMR available', 'std'],
+        ['Building owner aware of obligations', 'std'],
+        ['Non-conformances rectified', 'std'],
+        ['AESMR issued + signed', 'std']
+      ]}
+    ]
+  }
+};
+
+(function applyPhaseOFills() {
+  if (typeof INSPECTION_TYPES === 'undefined') return;
+  
+  Object.keys(PHASE_O_TEMPLATE_FILLS).forEach(typeId => {
+    const tpl = PHASE_O_TEMPLATE_FILLS[typeId];
+    const existing = INSPECTION_TYPES.find(t => t.id === typeId);
+    if (!existing) return; /* skip if not in INSPECTION_TYPES */
+    
+    /* Only fill if currently empty or near-empty */
+    const currentItems = (existing.items || []).length;
+    if (currentItems > 30 && existing._sectionGroups && existing._sectionGroups.length > 3) return;
+    
+    const flatItems = [];
+    const sectionMap = [];
+    const stdMarks = [];
+    
+    tpl.sections.forEach(sec => {
+      sec.items.forEach(item => {
+        flatItems.push(item[0]);
+        sectionMap.push(sec.name);
+        stdMarks.push(item[1]);
+      });
+    });
+    
+    existing.name = tpl.name;
+    existing.standard = tpl.standard;
+    existing.scope = tpl.scope;
+    existing.items = flatItems;
+    existing._sections = sectionMap;
+    existing._stdMarks = stdMarks;
+    existing._sectionGroups = tpl.sections;
+    existing._origItems = flatItems;
+    existing._origSections = sectionMap;
+    existing._comprehensive = false;
+    
+    console.log('[Phase O] Filled ' + typeId + ' with ' + flatItems.length + ' items');
+  });
+})();
+
+console.log('[Phase O] Nav + Load + Cloud + AI Keys mobile + Checklist fills loaded');
+
+
 </script>
 </body>
 </html>
