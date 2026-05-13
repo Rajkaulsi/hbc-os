@@ -17366,6 +17366,565 @@ window.mbItemAI = function(itemKey) {
 console.log('[Phase H] AI integration loaded — popup off, real API, diagnostic, per-feature routing, defect rewrite, photo scan');
 
 
+
+/* ============================================================
+   PHASE I — FIX AI + KILL POPUP PROPERLY (V28)
+   Diagnosed bugs from real test:
+   • Gemini 2.5 Flash → 404 (model doesn't exist publicly)
+   • Routing pointed defects/photos/chat to providers with no key
+   • Popup still showing — needs harder kill
+   ============================================================ */
+
+/* ---------- 1. NUCLEAR POPUP KILL ---------- */
+(function nuclearPopupKill() {
+  /* Patch alert globally — block the templates message no matter who calls it */
+  const origAlert = window.alert;
+  window.alert = function(msg) {
+    if (msg && typeof msg === 'string' && msg.indexOf('Templates populated') > -1) {
+      console.log('[Phase I] Blocked annoying popup:', msg);
+      return; /* swallow */
+    }
+    return origAlert.call(this, msg);
+  };
+  
+  /* Also: if autoTemplates exists, wrap it so the alert literal inside the function can't fire */
+  if (typeof autoTemplates === 'function') {
+    const orig = window.autoTemplates;
+    window.autoTemplates = function() {
+      const savedAlert = window.alert;
+      window.alert = function(m) {
+        if (m && typeof m === 'string' && m.indexOf('Templates populated') > -1) return;
+        return savedAlert.call(this, m);
+      };
+      try { return orig.apply(this, arguments); } finally { window.alert = savedAlert; }
+    };
+  }
+  
+  console.log('[Phase I] Popup killed at alert layer + autoTemplates wrapper');
+})();
+
+/* ---------- 2. NORMALIZE GEMINI MODEL NAMES ---------- */
+window.__GEMINI_MODEL_MAP = {
+  'gemini 2.5 pro': 'gemini-2.0-flash',
+  'gemini 2.5 flash': 'gemini-2.0-flash',
+  'gemini 2.0 pro': 'gemini-2.0-flash',
+  'gemini 2.0 flash': 'gemini-2.0-flash',
+  'gemini 2.0 flash exp': 'gemini-2.0-flash-exp',
+  'gemini 1.5 pro': 'gemini-1.5-pro-latest',
+  'gemini 1.5 flash': 'gemini-1.5-flash-latest',
+  'gemini pro': 'gemini-1.5-pro-latest',
+  'gemini flash': 'gemini-1.5-flash-latest',
+  'gemini': 'gemini-2.0-flash'
+};
+
+function normalizeGeminiModel(rawName) {
+  if (!rawName) return 'gemini-2.0-flash';
+  const lc = String(rawName).toLowerCase().trim();
+  if (__GEMINI_MODEL_MAP[lc]) return __GEMINI_MODEL_MAP[lc];
+  if (/^gemini-(1\.5|2\.0)-(flash|pro)(-latest|-exp)?$/.test(lc)) return lc;
+  if (lc.startsWith('gemini')) return 'gemini-2.0-flash';
+  return 'gemini-1.5-flash-latest';
+}
+
+/* ---------- 3. NORMALIZE CLAUDE MODEL NAMES ---------- */
+window.__CLAUDE_MODEL_MAP = {
+  /* Friendly names */
+  'claude sonnet': 'claude-sonnet-4-5-20250929',
+  'claude opus': 'claude-opus-4-1-20250805',
+  'claude haiku': 'claude-haiku-4-5-20251001',
+  'claude 4.5 sonnet': 'claude-sonnet-4-5-20250929',
+  'claude 4 sonnet': 'claude-sonnet-4-5-20250929',
+  'claude 4 opus': 'claude-opus-4-1-20250805',
+  'claude 4.1 opus': 'claude-opus-4-1-20250805',
+  'claude 4.5 haiku': 'claude-haiku-4-5-20251001',
+  'claude 3.5 sonnet': 'claude-3-5-sonnet-20241022',
+  'claude 3.5 haiku': 'claude-3-5-haiku-20241022',
+  'claude 3 opus': 'claude-3-opus-20240229',
+  'claude': 'claude-sonnet-4-5-20250929',
+  'sonnet': 'claude-sonnet-4-5-20250929',
+  'opus': 'claude-opus-4-1-20250805',
+  'haiku': 'claude-haiku-4-5-20251001'
+};
+
+function normalizeClaudeModel(rawName) {
+  if (!rawName) return 'claude-sonnet-4-5-20250929';
+  const lc = String(rawName).toLowerCase().trim();
+  if (__CLAUDE_MODEL_MAP[lc]) return __CLAUDE_MODEL_MAP[lc];
+  /* Already a valid model ID with date stamp */
+  if (/^claude-(sonnet|opus|haiku)-\d/.test(lc)) return lc;
+  if (/^claude-\d.*-\d{8}$/.test(lc)) return lc;
+  /* Fallback to current Sonnet */
+  return 'claude-sonnet-4-5-20250929';
+}
+
+/* ---------- 4. NORMALIZE OPENAI MODEL NAMES ---------- */
+window.__OPENAI_MODEL_MAP = {
+  /* Friendly names */
+  'gpt-5': 'gpt-4o',
+  'gpt-5 thinking': 'gpt-4o',
+  'gpt-5.5': 'gpt-4o',
+  'gpt-5.5 thinking': 'gpt-4o',
+  'gpt-4 turbo': 'gpt-4-turbo',
+  'gpt-4o': 'gpt-4o',
+  'gpt-4o mini': 'gpt-4o-mini',
+  'gpt-4.5': 'gpt-4o',
+  'gpt-4': 'gpt-4o',
+  'chatgpt': 'gpt-4o-mini',
+  'openai': 'gpt-4o-mini',
+  'o1': 'gpt-4o',
+  'o1 mini': 'gpt-4o-mini',
+  'o3': 'gpt-4o',
+  'o3 mini': 'gpt-4o-mini'
+};
+
+function normalizeOpenAIModel(rawName) {
+  if (!rawName) return 'gpt-4o-mini';
+  const lc = String(rawName).toLowerCase().trim();
+  if (__OPENAI_MODEL_MAP[lc]) return __OPENAI_MODEL_MAP[lc];
+  /* Already a real OpenAI model ID */
+  if (/^gpt-(3\.5|4o?|4-turbo)(-mini|-vision|-preview)?$/.test(lc)) return lc;
+  if (/^o\d(-mini)?$/.test(lc)) return 'gpt-4o-mini'; /* o1, o3 mapped to gpt-4o */
+  /* Fallback */
+  return 'gpt-4o-mini';
+}
+
+/* ---------- 5. SMART ROUTING — fallback to any enabled provider ---------- */
+window.getProviderForFeature = function(featureName) {
+  const ai = (PROJECT.settings && PROJECT.settings.ai) || {};
+  const routing = ai.routing || {};
+  const featureRouting = ai.featureRouting || {};
+  
+  /* Find which display name is routed for this feature */
+  const routedName = featureRouting[featureName] || routing[featureName] || routing.chat;
+  
+  let providerId = null;
+  if (typeof routedName === 'string') {
+    const n = routedName.toLowerCase();
+    if (n.includes('gemini') || n === 'google') providerId = 'google';
+    else if (n.includes('claude')) providerId = 'claude';
+    else if (n.includes('gpt') || n.includes('chat') || n.includes('openai')) providerId = 'chatgpt';
+  }
+  
+  /* Check if routed provider has a key */
+  if (providerId) {
+    const cfg = ai[providerId];
+    if (cfg && cfg.key && cfg.key.length > 10) {
+      return { id: providerId, name: providerId === 'google' ? 'Gemini' : providerId === 'claude' ? 'Claude' : 'ChatGPT', cfg };
+    }
+  }
+  
+  /* SMART FALLBACK: routed provider missing key — use any one that IS configured */
+  const fallbackOrder = ['google', 'claude', 'chatgpt'];
+  for (const pid of fallbackOrder) {
+    const cfg = ai[pid];
+    if (cfg && cfg.key && cfg.key.length > 10) {
+      console.log('[Phase I] Routed "' + routedName + '" for ' + featureName + ' had no key, falling back to ' + pid);
+      return { id: pid, name: pid === 'google' ? 'Gemini' : pid === 'claude' ? 'Claude' : 'ChatGPT', cfg };
+    }
+  }
+  
+  return null;
+};
+
+/* ---------- 6. CALL AI — uses normalized models ---------- */
+window.callAI = async function(provider, prompt, options) {
+  options = options || {};
+  const maxTokens = options.maxTokens || 1500;
+  const image = options.image;
+  
+  if (!provider || !provider.cfg || !provider.cfg.key) {
+    throw new Error('No API key for provider');
+  }
+  
+  const cfg = provider.cfg;
+  
+  if (provider.id === 'google') {
+    const model = normalizeGeminiModel(cfg.model);
+    const url = 'https://generativelanguage.googleapis.com/v1beta/models/' + encodeURIComponent(model) + ':generateContent?key=' + encodeURIComponent(cfg.key);
+    
+    const parts = [{ text: prompt }];
+    if (image && image.base64) {
+      parts.unshift({ inline_data: { mime_type: image.mime || 'image/jpeg', data: image.base64 } });
+    }
+    
+    const r = await fetch(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        contents: [{ parts: parts }],
+        generationConfig: { maxOutputTokens: maxTokens }
+      })
+    });
+    
+    const responseText = await r.text();
+    if (!r.ok) {
+      throw new Error('Gemini ' + r.status + ' (model=' + model + ', input="' + (cfg.model||'') + '"): ' + responseText.slice(0, 400));
+    }
+    
+    let data;
+    try { data = JSON.parse(responseText); }
+    catch(e) { throw new Error('Gemini returned non-JSON: ' + responseText.slice(0, 200)); }
+    
+    const text = data.candidates && data.candidates[0] && data.candidates[0].content && data.candidates[0].content.parts && data.candidates[0].content.parts[0] && data.candidates[0].content.parts[0].text;
+    if (!text) {
+      const blockReason = data.candidates?.[0]?.finishReason;
+      const safetyBlock = data.promptFeedback?.blockReason;
+      throw new Error('Gemini empty (model=' + model + '). Reason: ' + (blockReason || safetyBlock || 'unknown'));
+    }
+    return text.trim();
+  }
+  
+  if (provider.id === 'claude') {
+    const model = normalizeClaudeModel(cfg.model);
+    
+    const content = [];
+    if (image && image.base64) {
+      content.push({ type: 'image', source: { type: 'base64', media_type: image.mime || 'image/jpeg', data: image.base64 } });
+    }
+    content.push({ type: 'text', text: prompt });
+    
+    const r = await fetch('https://api.anthropic.com/v1/messages', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'x-api-key': cfg.key,
+        'anthropic-version': '2023-06-01',
+        'anthropic-dangerous-direct-browser-access': 'true'
+      },
+      body: JSON.stringify({
+        model: model,
+        max_tokens: maxTokens,
+        messages: [{ role: 'user', content: content }]
+      })
+    });
+    
+    const responseText = await r.text();
+    if (!r.ok) {
+      throw new Error('Claude ' + r.status + ' (model=' + model + ', input="' + (cfg.model||'') + '"): ' + responseText.slice(0, 400));
+    }
+    
+    let data;
+    try { data = JSON.parse(responseText); }
+    catch(e) { throw new Error('Claude returned non-JSON: ' + responseText.slice(0, 200)); }
+    
+    const text = data.content?.[0]?.text;
+    if (!text) throw new Error('Claude empty (model=' + model + ')');
+    return text.trim();
+  }
+  
+  if (provider.id === 'chatgpt') {
+    const model = normalizeOpenAIModel(cfg.model);
+    
+    const messages = [];
+    if (image && image.base64) {
+      messages.push({
+        role: 'user',
+        content: [
+          { type: 'text', text: prompt },
+          { type: 'image_url', image_url: { url: 'data:' + (image.mime || 'image/jpeg') + ';base64,' + image.base64 } }
+        ]
+      });
+    } else {
+      messages.push({ role: 'user', content: prompt });
+    }
+    
+    const r = await fetch('https://api.openai.com/v1/chat/completions', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + cfg.key },
+      body: JSON.stringify({ model: model, max_tokens: maxTokens, messages: messages })
+    });
+    
+    const responseText = await r.text();
+    if (!r.ok) {
+      throw new Error('OpenAI ' + r.status + ' (model=' + model + ', input="' + (cfg.model||'') + '"): ' + responseText.slice(0, 400));
+    }
+    
+    let data;
+    try { data = JSON.parse(responseText); }
+    catch(e) { throw new Error('OpenAI returned non-JSON: ' + responseText.slice(0, 200)); }
+    
+    const text = data.choices?.[0]?.message?.content;
+    if (!text) throw new Error('OpenAI empty (model=' + model + ')');
+    return text.trim();
+  }
+  
+  throw new Error('Unknown provider: ' + provider.id);
+};
+
+/* ---------- 7. UPDATE DIAGNOSTIC TO SHOW MODEL TRANSLATION ---------- */
+window.runAITest = async function() {
+  const ai = (PROJECT.settings && PROJECT.settings.ai) || {};
+  
+  let report = '=== AI DIAGNOSTIC TEST ===\n\n';
+  report += 'Configured providers in PROJECT.settings.ai:\n';
+  ['google', 'claude', 'chatgpt'].forEach(id => {
+    const p = ai[id] || {};
+    report += '  ' + id + ': ';
+    if (p.key && p.key.length > 10) {
+      report += 'KEY SET (length ' + p.key.length + ', ...' + p.key.slice(-4) + ')';
+      if (p.model) {
+        const normalized = id === 'google' ? normalizeGeminiModel(p.model) : id === 'claude' ? normalizeClaudeModel(p.model) : normalizeOpenAIModel(p.model);
+        report += '\n    Input model: "' + p.model + '"';
+        report += '\n    Translates to: ' + normalized;
+      }
+      report += '\n';
+    } else {
+      report += 'no key\n';
+    }
+  });
+  
+  report += '\nRouting (where each feature looks):\n';
+  const routing = ai.routing || {};
+  Object.keys(routing).forEach(k => { report += '  ' + k + ': ' + routing[k] + '\n'; });
+  const featureRouting = ai.featureRouting || {};
+  Object.keys(featureRouting).forEach(k => { report += '  feature.' + k + ': ' + featureRouting[k] + '\n'; });
+  
+  /* Show what each feature will actually use after smart fallback */
+  report += '\nAfter smart routing fallback:\n';
+  ['defectWriting', 'imageScan', 'mentorChat', 'documents'].forEach(f => {
+    const p = getProviderForFeature(f);
+    report += '  ' + f + ' → ' + (p ? p.name : 'NONE — no AI keys configured') + '\n';
+  });
+  
+  /* Live test of each enabled provider */
+  report += '\n=== LIVE TEST ===\n\n';
+  
+  const enabled = [];
+  ['google', 'claude', 'chatgpt'].forEach(id => {
+    const p = ai[id];
+    if (p && p.key && p.key.length > 10) {
+      enabled.push({
+        id, name: id === 'google' ? 'Gemini' : id === 'claude' ? 'Claude' : 'ChatGPT', cfg: p
+      });
+    }
+  });
+  
+  if (!enabled.length) {
+    report += '❌ No providers with API keys.\n\nGet a free Gemini key at https://aistudio.google.com/apikey';
+    return report;
+  }
+  
+  for (const p of enabled) {
+    report += 'Testing ' + p.name + ' (' + p.id + ')...\n';
+    try {
+      const result = await callAI(p, 'Respond with exactly two words: "AI works"', { maxTokens: 50 });
+      report += '  ✓ SUCCESS — "' + result.slice(0, 150) + '"\n\n';
+    } catch (err) {
+      report += '  ✗ FAILED — ' + err.message + '\n\n';
+    }
+  }
+  
+  return report;
+};
+
+console.log('[Phase I] Model normalization for all 3 providers + smart fallback + popup nuclear kill');
+
+
+
+/* ============================================================
+   PHASE J — FIX EDIT BUTTON + PERMANENT ADD SECTION (V29)
+   Bug: tapping Edit on section list does nothing visible
+   Cause: state toggle not propagating through nested render wrappers
+   Fix: rebuild section list with always-visible Add Custom Section button
+        + ALWAYS-VISIBLE Edit mode that's just a one-tap action
+   ============================================================ */
+
+/* ---------- 1. REPLACE mbToggleEditSections WITH IMMEDIATE-UPDATE VERSION ---------- */
+window.mbToggleEditSections = function() {
+  if (typeof haptic === 'function') haptic(8);
+  if (!window.MOBILE_STATE) window.MOBILE_STATE = {};
+  MOBILE_STATE.editSections = !MOBILE_STATE.editSections;
+  console.log('[Phase J] Edit toggled to:', MOBILE_STATE.editSections);
+  /* Force immediate re-render */
+  if (typeof renderMobilePage === 'function') {
+    renderMobilePage();
+  }
+  if (typeof showToast === 'function') {
+    showToast(MOBILE_STATE.editSections ? '✎ Edit mode — tap ✕ to remove, tap + to add' : '✓ Done editing', 'ok');
+  }
+};
+
+/* ---------- 2. REPLACE renderMobileSectionList — Add button ALWAYS visible ---------- */
+window.renderMobileSectionList = function() {
+  if (typeof ensureLocations === 'function') ensureLocations();
+  const cur = PROJECT.inspections.currentType;
+  const insp = INSPECTION_TYPES.find(t => t.id === cur);
+  if (!insp) return '<p style="padding:20px">No active inspection.</p>';
+  
+  const sections = (typeof mbBuildSectionList === 'function') ? mbBuildSectionList() : [];
+  const editMode = !!MOBILE_STATE.editSections;
+  const reportId = (PROJECT.id || 'NEW').replace('JOB_', '');
+  
+  /* Header bar — back, report id, settings, edit */
+  let html = '<div style="display:flex;align-items:center;gap:8px;padding:0 0 12px;border-bottom:1px solid #e5e7eb;margin-bottom:14px">' +
+    '<button class="mb-iconbtn" style="background:#fff;color:#0D1B2A;border:1.5px solid #e5e7eb;width:44px;height:44px;border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:18px" onclick="mbSwitchTab(\'dashboard\')" aria-label="Back">←</button>' +
+    '<div style="flex:1">' +
+      '<div style="font-size:10px;text-transform:uppercase;letter-spacing:1px;color:#64748b;font-weight:700">Report ID</div>' +
+      '<div style="font-size:13px;font-weight:600;color:#0D1B2A;font-family:monospace">' + esc(reportId) + '</div>' +
+    '</div>' +
+    '<button class="mb-iconbtn" style="background:#F05A28;color:#fff;width:44px;height:44px;border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:18px;border:none" onclick="mbOpenSettingsMenu()" aria-label="Settings">⚙</button>' +
+    '<button class="mb-detail-btn" style="padding:10px 16px;font-size:13px;font-weight:700;background:' + (editMode ? '#16a34a' : '#F05A28') + ';color:#fff;border:none;border-radius:22px;cursor:pointer;min-width:74px" onclick="mbToggleEditSections()">' + (editMode ? '✓ Done' : '✎ Edit') + '</button>' +
+  '</div>';
+  
+  html += '<h2 style="font-family:\'Barlow Condensed\',sans-serif;text-transform:uppercase;letter-spacing:1px;margin:0 0 4px;font-size:18px;color:#0D1B2A">' + esc(insp.name) + '</h2>';
+  html += '<p style="font-size:11px;color:#64748b;margin:0 0 14px">' + esc(insp.standard || '') + '</p>';
+  
+  if (editMode) {
+    html += '<div style="background:#fff7ed;border:1.5px dashed #F05A28;border-radius:10px;padding:10px 12px;margin-bottom:14px;font-size:12px;color:#9a3412"><strong>Edit mode active.</strong> Tap ✕ to remove custom sections. Tap "+ Add Custom Section" below to add new ones. Tap "✓ Done" when finished.</div>';
+  }
+  
+  /* Comprehensive toggle */
+  if (insp._stdMarks) {
+    const stdCount = insp._stdMarks.filter(m => m === 'std').length;
+    const totalCount = insp._stdMarks.length;
+    html += '<div style="background:#fff;border-radius:10px;padding:10px 12px;margin-bottom:14px;display:flex;align-items:center;gap:10px;box-shadow:0 1px 3px rgba(0,0,0,.05)">' +
+      '<div style="flex:1">' +
+        '<div style="font-size:10px;text-transform:uppercase;letter-spacing:1px;color:#64748b;font-weight:700">Depth</div>' +
+        '<div style="font-size:13px;font-weight:600;color:#0D1B2A;margin-top:2px">' + (insp._comprehensive ? 'Comprehensive (' + totalCount + ' items)' : 'Standard (' + stdCount + ' items)') + '</div>' +
+      '</div>' +
+      '<button class="mb-detail-btn primary" style="padding:8px 14px;font-size:12px" onclick="mbToggleComprehensive()">' +
+        (insp._comprehensive ? 'Standard →' : 'Comprehensive →') + '</button>' +
+    '</div>';
+  }
+  
+  /* Legend */
+  html += '<div style="display:flex;gap:14px;font-size:12px;color:#475569;font-weight:600;padding:6px 0;margin-bottom:8px">' +
+    '<span style="display:flex;align-items:center;gap:6px"><span style="width:10px;height:10px;border-radius:50%;background:#16a34a;display:inline-block"></span>Complete</span>' +
+    '<span style="display:flex;align-items:center;gap:6px"><span style="width:10px;height:10px;border-radius:50%;background:#F05A28;display:inline-block"></span>Incomplete</span>' +
+  '</div>';
+  
+  /* Sections */
+  if (!sections.length) {
+    html += '<div style="text-align:center;padding:40px 20px;color:#94a3b8;background:#fff;border-radius:12px"><div style="font-size:48px;margin-bottom:14px">📋</div><p>No sections in this template yet.</p></div>';
+  } else {
+    sections.forEach((sec, idx) => {
+      const dotColor = sec.complete ? '#16a34a' : '#F05A28';
+      const onClick = editMode ? '' : 'onclick="mbOpenSection(\'' + sec.name.replace(/'/g, "\\'") + '\')"';
+      html += '<div style="background:#fff;border-radius:10px;padding:14px 16px;margin-bottom:8px;box-shadow:0 1px 3px rgba(0,0,0,.05);display:flex;align-items:center;gap:12px;cursor:' + (editMode ? 'default' : 'pointer') + '" ' + onClick + '>' +
+        '<span style="width:12px;height:12px;border-radius:50%;background:' + dotColor + ';display:inline-block;flex-shrink:0"></span>' +
+        '<div style="flex:1;min-width:0">' +
+          '<div style="font-size:13px;font-weight:700;color:#0D1B2A;text-transform:uppercase;letter-spacing:1px;line-height:1.3">' + esc(sec.name) + '</div>' +
+          '<div style="font-size:11px;color:#64748b;margin-top:2px">' + sec.completed + '/' + sec.total + ' items' +
+            (sec.failed ? ' · <span style="color:#dc2626;font-weight:700">' + sec.failed + ' failed</span>' : '') +
+            (sec.maint ? ' · <span style="color:#d97706;font-weight:700">' + sec.maint + ' maint</span>' : '') +
+            (sec.isCustom ? ' · <span style="color:#F05A28;font-weight:700">custom</span>' : '') +
+          '</div>' +
+        '</div>';
+      
+      if (editMode) {
+        if (sec.isCustom) {
+          html += '<button class="mb-detail-btn" style="background:#fee2e2;color:#991b1b;padding:8px 12px;font-size:13px;border:none;border-radius:6px;font-weight:700;cursor:pointer" onclick="event.stopPropagation();mbDeleteCustomSection(\'' + sec.name.replace(/'/g, "\\'") + '\')">✕ Remove</button>';
+        } else {
+          html += '<span style="font-size:10px;color:#94a3b8;padding:4px 8px;background:#f6f8fa;border-radius:4px">built-in</span>';
+        }
+      } else {
+        html += '<span style="color:#F05A28;font-size:18px;font-weight:700">›</span>';
+      }
+      
+      html += '</div>';
+    });
+  }
+  
+  /* ALWAYS show + Add Custom Section button at the bottom — not only in edit mode */
+  html += '<button onclick="mbAddCustomSection()" style="display:flex;align-items:center;justify-content:center;gap:8px;width:100%;background:linear-gradient(180deg,#FF7A4A 0%,#F05A28 100%);color:#fff;border:none;border-radius:12px;padding:16px;margin-top:14px;font-size:15px;font-weight:700;cursor:pointer;box-shadow:0 2px 8px rgba(240,90,40,.3)">' +
+    '<span style="font-size:20px">+</span>' +
+    '<span>Add Custom Section</span>' +
+  '</button>';
+  
+  /* Also a hint */
+  html += '<p style="font-size:11px;color:#94a3b8;text-align:center;margin:10px 0 30px">Add things like Pool Area, Granny Flat, Theatre Room, Workshop — anything not already in the template.</p>';
+  
+  return html;
+};
+
+/* ---------- 3. REPLACE mbAddCustomSection WITH BETTER UX ---------- */
+window.mbAddCustomSection = function() {
+  if (typeof haptic === 'function') haptic(8);
+  
+  /* Use a proper bottom sheet instead of prompt() — easier on mobile */
+  mbBottomSheet('Add Custom Section',
+    '<p style="font-size:13px;color:#64748b;margin-bottom:14px">Give your custom section a name. Examples: <strong>Pool Area</strong>, <strong>Granny Flat</strong>, <strong>Workshop</strong>, <strong>Theatre Room</strong>, <strong>Outbuilding</strong>.</p>' +
+    '<span class="mb-detail-label">Section name *</span>' +
+    '<input id="newSecName" class="mb-detail-input" placeholder="e.g. Pool Area" style="font-size:16px" autofocus>' +
+    '<p style="font-size:11px;color:#94a3b8;margin:10px 0 0">After adding, tap into the section and use "+ Item" to add custom inspection points.</p>' +
+    '<div class="mb-detail-actions" style="margin-top:14px">' +
+      '<button class="mb-detail-btn" onclick="mbCloseSheet()">Cancel</button>' +
+      '<button class="mb-detail-btn primary" onclick="mbSaveCustomSection()">+ Add Section</button>' +
+    '</div>'
+  );
+  /* Focus the input after sheet animation */
+  setTimeout(function() {
+    const inp = document.getElementById('newSecName');
+    if (inp) inp.focus();
+  }, 200);
+};
+
+window.mbSaveCustomSection = function() {
+  const inp = document.getElementById('newSecName');
+  const name = inp ? inp.value.trim() : '';
+  if (!name) {
+    if (typeof showToast === 'function') showToast('Please enter a section name', 'warn');
+    return;
+  }
+  const cur = PROJECT.inspections.currentType;
+  PROJECT.customSections = PROJECT.customSections || {};
+  PROJECT.customSections[cur] = PROJECT.customSections[cur] || [];
+  if (PROJECT.customSections[cur].indexOf(name) === -1) {
+    PROJECT.customSections[cur].push(name);
+  }
+  if (typeof saveProject === 'function') saveProject(true);
+  if (typeof haptic === 'function') haptic([10, 30, 10]);
+  mbCloseSheet();
+  if (typeof showToast === 'function') showToast('✓ Section added: ' + name, 'ok');
+  if (typeof renderMobilePage === 'function') renderMobilePage();
+};
+
+/* ---------- 4. ALSO MAKE "Add Location" PROMINENT ---------- */
+/* The existing mbOpenLocationPicker already has Add Custom button at the bottom of the sheet.
+   Let me make sure that's still working and obvious. */
+(function ensureLocationAddIsPrettier() {
+  const orig = window.mbAddCustomLocation;
+  window.mbAddCustomLocation = function() {
+    if (typeof haptic === 'function') haptic(8);
+    mbBottomSheet('Add Custom Location',
+      '<p style="font-size:13px;color:#64748b;margin-bottom:14px">Add a location to your active list. Examples: <strong>Theatre Room</strong>, <strong>Wine Cellar</strong>, <strong>Plant Room</strong>, <strong>Granny Flat</strong>.</p>' +
+      '<span class="mb-detail-label">Location name *</span>' +
+      '<input id="newLocName" class="mb-detail-input" placeholder="e.g. Theatre Room" style="font-size:16px">' +
+      '<div class="mb-detail-actions" style="margin-top:14px">' +
+        '<button class="mb-detail-btn" onclick="mbCloseSheet()">Cancel</button>' +
+        '<button class="mb-detail-btn primary" onclick="mbSaveCustomLocation()">+ Add Location</button>' +
+      '</div>'
+    );
+    setTimeout(function() {
+      const inp = document.getElementById('newLocName');
+      if (inp) inp.focus();
+    }, 200);
+  };
+})();
+
+window.mbSaveCustomLocation = function() {
+  const inp = document.getElementById('newLocName');
+  const name = inp ? inp.value.trim() : '';
+  if (!name) {
+    if (typeof showToast === 'function') showToast('Please enter a location name', 'warn');
+    return;
+  }
+  if (typeof ensureLocations === 'function') ensureLocations();
+  PROJECT.locations.custom = PROJECT.locations.custom || [];
+  if (PROJECT.locations.custom.indexOf(name) === -1) {
+    PROJECT.locations.custom.push(name);
+  }
+  PROJECT.locations.active = name;
+  if (typeof saveProject === 'function') saveProject(true);
+  if (typeof haptic === 'function') haptic([10, 30, 10]);
+  mbCloseSheet();
+  if (typeof showToast === 'function') showToast('✓ Location added & active: ' + name, 'ok');
+  if (typeof renderMobilePage === 'function') renderMobilePage();
+};
+
+console.log('[Phase J] Edit button fixed + Add Custom Section always visible + Add Location prettier');
+
+
 </script>
 </body>
 </html>
