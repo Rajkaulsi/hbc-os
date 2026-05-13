@@ -7747,6 +7747,1887 @@ renderSettings = function() {
 setTimeout(() => renderPages(), 50);
 
 
+
+/* ============================================================
+   PHASE 1 — MOBILE-FIRST INSPECTION APP
+   Builds GoAudits / Hello Inspection / Fulcrum-style UI for mobile.
+   Desktop view untouched — branches on viewport width.
+   
+   Features:
+   • Bottom tab bar (5 tabs) on mobile
+   • Inline-expandable inspection item cards
+   • 60px+ touch targets
+   • Pass / Fail / N/A as huge colour buttons
+   • Conditional fields (severity, cost only when failed)
+   • In-camera bulk photo capture
+   • Voice-to-text notes (iOS Speech API)
+   • Severity triggers (auto-fail on Sev 5)
+   • Cost stripped from client reports
+   • Haptic feedback
+   • Bottom-sheet modals
+   ============================================================ */
+
+/* Detect mobile viewport */
+function isMobileView() {
+  return window.innerWidth <= 768 || /iPhone|iPod|Android.*Mobile/i.test(navigator.userAgent);
+}
+
+/* Haptic feedback helper */
+function haptic(pattern) {
+  if (navigator.vibrate) {
+    navigator.vibrate(pattern || 8);
+  }
+}
+
+/* ---------- MOBILE STYLES ---------- */
+const mobileStyles = document.createElement('style');
+mobileStyles.id = 'hbc-mobile-styles';
+mobileStyles.textContent = `
+@media (max-width: 768px) {
+  /* Hide desktop chrome */
+  body.mobile-mode .tabs,
+  body.mobile-mode .stagebar,
+  body.mobile-mode .toolbar {
+    display: none !important;
+  }
+  
+  /* Fix the broken column hiding from earlier */
+  body.mobile-mode table th:nth-child(n+5),
+  body.mobile-mode table td:nth-child(n+5) {
+    display: table-cell !important;
+  }
+  
+  body.mobile-mode {
+    padding-bottom: calc(70px + env(safe-area-inset-bottom));
+    background: #f0eee8;
+  }
+  
+  body.mobile-mode #pages {
+    padding: 0;
+  }
+  
+  /* Mobile top bar */
+  .mb-topbar {
+    position: sticky;
+    top: 0;
+    background: #0D1B2A;
+    color: #fff;
+    padding: calc(env(safe-area-inset-top) + 8px) 14px 8px;
+    z-index: 100;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    box-shadow: 0 2px 8px rgba(0,0,0,.15);
+  }
+  .mb-topbar h1 {
+    flex: 1;
+    margin: 0;
+    font-family: 'Barlow Condensed', sans-serif;
+    font-size: 17px;
+    text-transform: uppercase;
+    letter-spacing: 1.5px;
+    color: #fff;
+    border: none;
+    padding: 0;
+  }
+  .mb-topbar .mb-iconbtn {
+    background: rgba(255,255,255,.12);
+    color: #fff;
+    border: none;
+    width: 38px;
+    height: 38px;
+    border-radius: 19px;
+    font-size: 18px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+  }
+  .mb-topbar .mb-iconbtn:active { background: #F05A28; }
+  
+  /* Bottom tab bar */
+  .mb-tabbar {
+    position: fixed;
+    bottom: 0;
+    left: 0;
+    right: 0;
+    background: #fff;
+    border-top: 1px solid #d2cec8;
+    padding: 6px 0 calc(env(safe-area-inset-bottom) + 4px);
+    z-index: 100;
+    display: flex;
+    box-shadow: 0 -2px 12px rgba(0,0,0,.08);
+  }
+  .mb-tab {
+    flex: 1;
+    background: transparent;
+    border: none;
+    padding: 6px 2px;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 2px;
+    color: #64748b;
+    font-size: 10px;
+    font-weight: 600;
+  }
+  .mb-tab .mb-tab-icon {
+    font-size: 22px;
+    line-height: 1;
+  }
+  .mb-tab.active { color: #F05A28; }
+  .mb-tab.active .mb-tab-icon { transform: scale(1.05); }
+  
+  /* Mobile content */
+  .mb-content { padding: 14px; }
+  
+  /* Inspection type chips */
+  .mb-insp-types {
+    display: flex;
+    gap: 8px;
+    overflow-x: auto;
+    padding: 4px 0 10px;
+    margin: 0 -14px;
+    padding-left: 14px;
+    padding-right: 14px;
+    scrollbar-width: none;
+  }
+  .mb-insp-types::-webkit-scrollbar { display: none; }
+  .mb-insp-types button {
+    flex: 0 0 auto;
+    background: #fff;
+    border: 1.5px solid #d2cec8;
+    padding: 8px 14px;
+    border-radius: 18px;
+    font-size: 12px;
+    font-weight: 600;
+    white-space: nowrap;
+    min-height: 38px;
+  }
+  .mb-insp-types button.active {
+    background: #0D1B2A;
+    color: #fff;
+    border-color: #0D1B2A;
+  }
+  
+  /* Section header */
+  .mb-section {
+    background: #fff;
+    border-radius: 12px;
+    margin-bottom: 12px;
+    overflow: hidden;
+    box-shadow: 0 1px 3px rgba(0,0,0,.05);
+  }
+  .mb-section-header {
+    display: flex;
+    align-items: center;
+    padding: 14px 16px;
+    background: #fff;
+    cursor: pointer;
+    user-select: none;
+  }
+  .mb-section-title {
+    flex: 1;
+    font-family: 'Barlow Condensed', sans-serif;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 1px;
+    font-size: 13px;
+    color: #0D1B2A;
+  }
+  .mb-section-progress {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    background: #f6f8fa;
+    padding: 4px 10px;
+    border-radius: 10px;
+    font-size: 11px;
+    font-weight: 600;
+    color: #64748b;
+  }
+  .mb-section-progress.done { background: #dcfce7; color: #166534; }
+  .mb-section-progress.fail { background: #fee2e2; color: #991b1b; }
+  
+  /* Inspection cards */
+  .mb-items-list {
+    padding: 0 8px 8px;
+  }
+  .mb-item-card {
+    background: #fff;
+    border: 1.5px solid #e5e7eb;
+    border-left: 5px solid #d2cec8;
+    border-radius: 10px;
+    padding: 12px 14px;
+    margin-bottom: 8px;
+    transition: border-left-color .2s, background .2s;
+    position: relative;
+  }
+  .mb-item-card.pass { border-left-color: #16a34a; background: #f0fdf4; }
+  .mb-item-card.fail { border-left-color: #dc2626; background: #fef2f2; }
+  .mb-item-card.maintenance { border-left-color: #d97706; background: #fffbeb; }
+  .mb-item-card.na { border-left-color: #94a3b8; background: #f8fafc; }
+  
+  .mb-item-title {
+    font-size: 14px;
+    font-weight: 600;
+    color: #0D1B2A;
+    margin-bottom: 4px;
+    line-height: 1.4;
+  }
+  .mb-item-cat {
+    font-size: 10px;
+    text-transform: uppercase;
+    letter-spacing: 1px;
+    color: #64748b;
+    font-weight: 700;
+    margin-bottom: 6px;
+  }
+  
+  /* Quick status buttons */
+  .mb-status-row {
+    display: flex;
+    gap: 6px;
+    margin-top: 8px;
+  }
+  .mb-status-btn {
+    flex: 1;
+    border: 1.5px solid #d2cec8;
+    background: #fff;
+    color: #0D1B2A;
+    padding: 11px 4px;
+    border-radius: 8px;
+    font-weight: 700;
+    font-size: 13px;
+    min-height: 44px;
+    transition: all .15s;
+    -webkit-tap-highlight-color: transparent;
+  }
+  .mb-status-btn:active { transform: scale(.96); }
+  .mb-status-btn.pass-active { background: #16a34a; color: #fff; border-color: #16a34a; }
+  .mb-status-btn.fail-active { background: #dc2626; color: #fff; border-color: #dc2626; }
+  .mb-status-btn.maint-active { background: #d97706; color: #fff; border-color: #d97706; }
+  .mb-status-btn.na-active { background: #64748b; color: #fff; border-color: #64748b; }
+  
+  /* Card chips (photo count, severity dot, etc) */
+  .mb-card-chips {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-top: 8px;
+    flex-wrap: wrap;
+  }
+  .mb-chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    background: #f6f8fa;
+    color: #475569;
+    padding: 4px 8px;
+    border-radius: 12px;
+    font-size: 11px;
+    font-weight: 600;
+  }
+  .mb-sev-dot {
+    width: 10px;
+    height: 10px;
+    border-radius: 50%;
+    display: inline-block;
+  }
+  .mb-sev-1 { background: #6b7280; }
+  .mb-sev-2 { background: #65a30d; }
+  .mb-sev-3 { background: #d97706; }
+  .mb-sev-4 { background: #ea580c; }
+  .mb-sev-5 { background: #dc2626; }
+  
+  /* Expanded item detail */
+  .mb-item-detail {
+    margin-top: 12px;
+    padding-top: 12px;
+    border-top: 1px solid #e5e7eb;
+  }
+  .mb-detail-label {
+    display: block;
+    font-size: 11px;
+    text-transform: uppercase;
+    letter-spacing: 1px;
+    color: #64748b;
+    font-weight: 700;
+    margin: 12px 0 6px;
+  }
+  .mb-detail-label:first-child { margin-top: 0; }
+  .mb-detail-input,
+  .mb-detail-input textarea,
+  .mb-detail-input select {
+    width: 100%;
+    padding: 12px;
+    border: 1.5px solid #d2cec8;
+    border-radius: 8px;
+    font-size: 15px; /* prevents iOS zoom */
+    font-family: 'Barlow', sans-serif;
+    background: #fff;
+    -webkit-appearance: none;
+  }
+  .mb-detail-input textarea { min-height: 80px; resize: vertical; }
+  
+  .mb-detail-sev {
+    display: grid;
+    grid-template-columns: repeat(5, 1fr);
+    gap: 4px;
+  }
+  .mb-detail-sev button {
+    border: 1.5px solid #d2cec8;
+    background: #fff;
+    padding: 10px 2px;
+    border-radius: 8px;
+    font-size: 11px;
+    font-weight: 700;
+    min-height: 44px;
+  }
+  .mb-detail-sev button.active.sev-1 { background: #6b7280; color: #fff; border-color: #6b7280; }
+  .mb-detail-sev button.active.sev-2 { background: #65a30d; color: #fff; border-color: #65a30d; }
+  .mb-detail-sev button.active.sev-3 { background: #d97706; color: #fff; border-color: #d97706; }
+  .mb-detail-sev button.active.sev-4 { background: #ea580c; color: #fff; border-color: #ea580c; }
+  .mb-detail-sev button.active.sev-5 { background: #dc2626; color: #fff; border-color: #dc2626; }
+  
+  /* Photo grid */
+  .mb-photo-grid {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 6px;
+    margin-top: 6px;
+  }
+  .mb-photo-thumb {
+    position: relative;
+    aspect-ratio: 1;
+    border-radius: 8px;
+    overflow: hidden;
+    background: #f6f8fa;
+  }
+  .mb-photo-thumb img {
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+  }
+  .mb-photo-thumb .mb-photo-del {
+    position: absolute;
+    top: 4px;
+    right: 4px;
+    background: rgba(220,38,38,.95);
+    color: #fff;
+    border: none;
+    width: 24px;
+    height: 24px;
+    border-radius: 12px;
+    font-size: 14px;
+    line-height: 1;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+  }
+  .mb-photo-add {
+    border: 2px dashed #d2cec8;
+    background: #fafafa;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 32px;
+    color: #94a3b8;
+    cursor: pointer;
+  }
+  
+  /* Action buttons row in detail */
+  .mb-detail-actions {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 6px;
+    margin-top: 12px;
+  }
+  .mb-detail-btn {
+    background: #fff;
+    border: 1.5px solid #d2cec8;
+    color: #0D1B2A;
+    padding: 12px 8px;
+    border-radius: 8px;
+    font-size: 12px;
+    font-weight: 700;
+    min-height: 44px;
+  }
+  .mb-detail-btn.primary { background: #0D1B2A; color: #fff; border-color: #0D1B2A; }
+  .mb-detail-btn.orange { background: #F05A28; color: #fff; border-color: #F05A28; }
+  
+  /* Bottom sheets */
+  .mb-sheet-overlay {
+    position: fixed;
+    inset: 0;
+    background: rgba(0,0,0,.5);
+    z-index: 200;
+    display: flex;
+    align-items: flex-end;
+  }
+  .mb-sheet {
+    background: #fff;
+    width: 100%;
+    border-radius: 20px 20px 0 0;
+    padding: 20px 16px calc(env(safe-area-inset-bottom) + 20px);
+    max-height: 85vh;
+    overflow-y: auto;
+    animation: mb-sheet-up .25s ease-out;
+  }
+  @keyframes mb-sheet-up {
+    from { transform: translateY(100%); }
+    to { transform: translateY(0); }
+  }
+  .mb-sheet-handle {
+    width: 36px;
+    height: 4px;
+    background: #d2cec8;
+    border-radius: 2px;
+    margin: -10px auto 14px;
+  }
+  .mb-sheet h3 {
+    margin: 0 0 14px;
+    font-family: 'Barlow Condensed', sans-serif;
+    text-transform: uppercase;
+    letter-spacing: 1.5px;
+    font-size: 16px;
+    color: #0D1B2A;
+  }
+  
+  /* Progress bar */
+  .mb-progress-bar {
+    height: 8px;
+    background: #e5e7eb;
+    border-radius: 4px;
+    overflow: hidden;
+    margin: 10px 0;
+  }
+  .mb-progress-fill {
+    height: 100%;
+    background: linear-gradient(90deg, #16a34a, #65a30d);
+    transition: width .3s;
+  }
+  
+  /* Score badge */
+  .mb-score-card {
+    background: #fff;
+    border-radius: 12px;
+    padding: 16px;
+    margin-bottom: 12px;
+    box-shadow: 0 1px 3px rgba(0,0,0,.05);
+  }
+  .mb-score-row {
+    display: flex;
+    align-items: center;
+    gap: 14px;
+  }
+  .mb-score-circle {
+    width: 64px;
+    height: 64px;
+    border-radius: 32px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-weight: 700;
+    font-size: 18px;
+    color: #fff;
+  }
+  .mb-score-label {
+    flex: 1;
+  }
+  .mb-score-label .label {
+    font-size: 11px;
+    text-transform: uppercase;
+    letter-spacing: 1px;
+    color: #64748b;
+    font-weight: 700;
+  }
+  .mb-score-label .stats {
+    font-size: 13px;
+    color: #0D1B2A;
+    font-weight: 600;
+    margin-top: 2px;
+  }
+  
+  /* Failed banner */
+  .mb-fail-banner {
+    background: #dc2626;
+    color: #fff;
+    padding: 12px 16px;
+    border-radius: 10px;
+    margin-bottom: 12px;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    font-weight: 700;
+  }
+  
+  /* Search */
+  .mb-search {
+    position: sticky;
+    top: 0;
+    background: rgba(240,238,232,.95);
+    backdrop-filter: blur(10px);
+    -webkit-backdrop-filter: blur(10px);
+    padding: 8px 0;
+    z-index: 50;
+    margin: 0 -14px 8px;
+    padding-left: 14px;
+    padding-right: 14px;
+  }
+  .mb-search input {
+    width: 100%;
+    padding: 10px 14px;
+    border: 1.5px solid #d2cec8;
+    border-radius: 22px;
+    font-size: 15px;
+    background: #fff;
+  }
+  .mb-filter-chips {
+    display: flex;
+    gap: 6px;
+    margin-top: 8px;
+    overflow-x: auto;
+    scrollbar-width: none;
+  }
+  .mb-filter-chips::-webkit-scrollbar { display: none; }
+  .mb-filter-chips button {
+    background: #fff;
+    border: 1.5px solid #d2cec8;
+    padding: 6px 12px;
+    border-radius: 14px;
+    font-size: 12px;
+    font-weight: 600;
+    white-space: nowrap;
+    min-height: 32px;
+  }
+  .mb-filter-chips button.active {
+    background: #F05A28;
+    color: #fff;
+    border-color: #F05A28;
+  }
+  
+  /* Voice button */
+  .mb-voice-btn {
+    background: #F05A28;
+    color: #fff;
+    border: none;
+    width: 44px;
+    height: 44px;
+    border-radius: 22px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 18px;
+    margin-left: 6px;
+    vertical-align: middle;
+  }
+  .mb-voice-btn.recording {
+    background: #dc2626;
+    animation: mb-pulse 1s infinite;
+  }
+  @keyframes mb-pulse {
+    0%, 100% { transform: scale(1); }
+    50% { transform: scale(1.1); }
+  }
+  
+  /* Notes row with voice */
+  .mb-notes-row {
+    display: flex;
+    align-items: flex-start;
+    gap: 0;
+  }
+  .mb-notes-row textarea {
+    flex: 1;
+  }
+  
+  /* Hide elements that don't fit mobile design */
+  body.mobile-mode #syncStatus {
+    display: none !important;
+  }
+}
+@media (min-width: 769px) {
+  body.mobile-mode .mb-topbar,
+  body.mobile-mode .mb-tabbar { display: none; }
+}
+`;
+document.head.appendChild(mobileStyles);
+
+/* ---------- MOBILE STATE ---------- */
+const MOBILE_STATE = {
+  activeTab: 'inspect',      // inspect | photos | actions | reports | setup
+  expandedItem: null,         // key of currently expanded item
+  expandedSection: null,      // null = all collapsed initially
+  sectionsOpen: {},           // {sectionId: true/false}
+  filterStatus: 'all',        // all | pending | failed | maintenance
+  searchQuery: '',
+  voiceRecording: false,
+  voiceTargetKey: null
+};
+
+/* Read body class to enable mobile mode */
+function enableMobileMode() {
+  if (isMobileView()) {
+    document.body.classList.add('mobile-mode');
+    return true;
+  } else {
+    document.body.classList.remove('mobile-mode');
+    return false;
+  }
+}
+
+/* Re-check on resize/orientation */
+window.addEventListener('resize', () => {
+  const wasMobile = document.body.classList.contains('mobile-mode');
+  const nowMobile = isMobileView();
+  if (wasMobile !== nowMobile) {
+    enableMobileMode();
+    renderPages();
+  }
+});
+
+/* ---------- MOBILE TOP BAR ---------- */
+function renderMobileTopBar() {
+  const tabLabels = {
+    inspect: 'Inspect',
+    photos: 'Photos',
+    actions: 'Action Items',
+    reports: 'Reports',
+    setup: 'Setup'
+  };
+  const title = tabLabels[MOBILE_STATE.activeTab] || 'HBC OS';
+  const c = PROJECT.client || {};
+  const propertyShort = c.address ? c.address.split(',')[0].slice(0, 22) : '';
+  return `<div class="mb-topbar">
+    <button class="mb-iconbtn" onclick="mbOpenProjectMenu()" aria-label="Menu">☰</button>
+    <h1>${esc(title)}${propertyShort ? `<br><span style="font-size:11px;opacity:.75;letter-spacing:.5px;text-transform:none;font-weight:400">${esc(propertyShort)}</span>` : ''}</h1>
+    <button class="mb-iconbtn" onclick="mbSyncStatus()" aria-label="Sync" title="Tap for sync status">${navigator.onLine ? '☁' : '🔌'}</button>
+  </div>`;
+}
+
+/* ---------- MOBILE BOTTOM TAB BAR ---------- */
+function renderMobileTabBar() {
+  const tabs = [
+    { id: 'inspect', icon: '📋', label: 'Inspect' },
+    { id: 'photos', icon: '📷', label: 'Photos' },
+    { id: 'actions', icon: '🎯', label: 'Actions' },
+    { id: 'reports', icon: '📑', label: 'Reports' },
+    { id: 'setup', icon: '⚙', label: 'Setup' }
+  ];
+  return `<div class="mb-tabbar">
+    ${tabs.map(t => `
+      <button class="mb-tab ${MOBILE_STATE.activeTab === t.id ? 'active' : ''}" onclick="mbSwitchTab('${t.id}')">
+        <span class="mb-tab-icon">${t.icon}</span>
+        <span>${esc(t.label)}</span>
+      </button>
+    `).join('')}
+  </div>`;
+}
+
+window.mbSwitchTab = function(tab) {
+  haptic(8);
+  MOBILE_STATE.activeTab = tab;
+  MOBILE_STATE.expandedItem = null;
+  renderMobilePage();
+  window.scrollTo({ top: 0, behavior: 'smooth' });
+};
+
+window.mbSyncStatus = function() {
+  haptic(8);
+  const isSignedIn = (typeof driveAccessToken !== 'undefined' && driveAccessToken) || localStorage.getItem('hbc_gdrive_signed_in') === '1';
+  const lastSync = localStorage.getItem('hbc_last_drive_sync');
+  const onlineState = navigator.onLine ? 'Online' : 'Offline';
+  mbBottomSheet('Sync Status', `
+    <div style="background:#f6f8fa;padding:12px;border-radius:10px;margin-bottom:10px">
+      <strong>Network:</strong> ${onlineState}<br>
+      <strong>Google Drive:</strong> ${isSignedIn ? '<span style="color:#16a34a;font-weight:bold">✅ Signed in</span>' : 'Not signed in'}<br>
+      ${lastSync ? `<strong>Last backup:</strong> ${new Date(lastSync).toLocaleString('en-AU')}` : ''}
+    </div>
+    ${isSignedIn ? `<button class="mb-detail-btn primary" style="width:100%" onclick="mbCloseSheet();driveSaveProject()">☁ Backup to Drive now</button>` : `<button class="mb-detail-btn primary" style="width:100%" onclick="mbCloseSheet();driveSignIn()">🔐 Sign in to Drive</button>`}
+  `);
+};
+
+window.mbOpenProjectMenu = function() {
+  haptic(8);
+  const c = PROJECT.client || {};
+  mbBottomSheet('Project Menu', `
+    <div style="background:#f6f8fa;padding:12px;border-radius:10px;margin-bottom:14px">
+      <strong>Property:</strong> ${esc(c.address || '— not set —')}<br>
+      <strong>Client:</strong> ${esc(c.name || '—')}<br>
+      <strong>Class:</strong> ${esc(c.class || '—')}
+    </div>
+    <button class="mb-detail-btn primary" style="width:100%;margin-bottom:6px" onclick="mbCloseSheet();mbEditClient()">✏ Edit project details</button>
+    <button class="mb-detail-btn" style="width:100%;margin-bottom:6px" onclick="mbCloseSheet();saveProject()">💾 Save now</button>
+    <button class="mb-detail-btn" style="width:100%;margin-bottom:6px" onclick="mbCloseSheet();goTab(0);document.body.classList.remove('mobile-mode');alert('Switched to desktop view. Reload or resize browser to return to mobile.')">🖥 Desktop view</button>
+    <button class="mb-detail-btn" style="width:100%" onclick="mbCloseSheet();mbShowAbout()">ℹ About HBC OS</button>
+  `);
+};
+
+window.mbShowAbout = function() {
+  mbBottomSheet('About HBC OS', `
+    <p style="font-size:13px;color:#64748b">Building consultant platform for Victorian inspections. Defects library ${DEFECT_LIBRARY.reduce((s,c)=>s+c.issues.length,0)}+ entries, ${INSPECTION_TYPES.length} inspection templates.</p>
+    <p style="font-size:11px;color:#94a3b8;margin-top:14px">© Homi Building Consultants · Phase 1 mobile build</p>
+  `);
+};
+
+/* ---------- BOTTOM SHEET HELPERS ---------- */
+window.mbBottomSheet = function(title, contentHTML) {
+  const existing = document.getElementById('mb-sheet-overlay');
+  if (existing) existing.remove();
+  const overlay = document.createElement('div');
+  overlay.className = 'mb-sheet-overlay';
+  overlay.id = 'mb-sheet-overlay';
+  overlay.onclick = (e) => {
+    if (e.target === overlay) mbCloseSheet();
+  };
+  overlay.innerHTML = `<div class="mb-sheet" onclick="event.stopPropagation()">
+    <div class="mb-sheet-handle"></div>
+    <h3>${esc(title)}</h3>
+    ${contentHTML}
+  </div>`;
+  document.body.appendChild(overlay);
+};
+
+window.mbCloseSheet = function() {
+  const overlay = document.getElementById('mb-sheet-overlay');
+  if (overlay) overlay.remove();
+};
+
+/* ---------- MOBILE PAGE RENDERER ---------- */
+function renderMobilePage() {
+  if (!document.body.classList.contains('mobile-mode')) return;
+  let html = renderMobileTopBar();
+  html += '<div class="mb-content">';
+  if (MOBILE_STATE.activeTab === 'inspect') html += renderMobileInspect();
+  else if (MOBILE_STATE.activeTab === 'photos') html += renderMobilePhotos();
+  else if (MOBILE_STATE.activeTab === 'actions') html += renderMobileActions();
+  else if (MOBILE_STATE.activeTab === 'reports') html += renderMobileReports();
+  else if (MOBILE_STATE.activeTab === 'setup') html += renderMobileSetup();
+  html += '</div>';
+  html += renderMobileTabBar();
+  const pagesDiv = document.getElementById('pages');
+  if (pagesDiv) pagesDiv.innerHTML = html;
+}
+
+/* ---------- INSPECT TAB ---------- */
+function renderMobileInspect() {
+  const cur = PROJECT.inspections.currentType || (INSPECTION_TYPES[0] && INSPECTION_TYPES[0].id);
+  const insp = INSPECTION_TYPES.find(i => i.id === cur);
+  if (!insp) return '<p>No inspection types available.</p>';
+  const checks = PROJECT.inspections[cur] = PROJECT.inspections[cur] || {};
+
+  /* Score widget */
+  let totItems = 0, pass = 0, fail = 0, maint = 0, na = 0, hasSev5Fail = false;
+  const buildItemList = () => {
+    const items = [];
+    if (insp.items) {
+      insp.items.forEach((it, i) => items.push({ label: it, key: `item_${i}`, section: 'Inspection items' }));
+    }
+    if (insp.stages) {
+      insp.stages.forEach((s, si) => {
+        s.chk.forEach((c, ci) => items.push({ label: c, key: `stage_${si}_${ci}`, section: s.n }));
+      });
+    }
+    if (insp.standards14) {
+      insp.standards14.forEach((it, i) => items.push({ label: it, key: `rms_${i}`, section: '14 Prescribed Standards' }));
+    }
+    if (insp.types) {
+      insp.types.forEach((it, i) => items.push({ label: it, key: `type_${i}`, section: 'Report types' }));
+    }
+    return items;
+  };
+  const itemList = buildItemList();
+  itemList.forEach(({key}) => {
+    const v = checks[key];
+    if (!v || !v.status) return;
+    totItems++;
+    const s = v.status;
+    if (s === 'Pass' || s === 'Compliant' || s === 'Yes' || s === 'C') pass++;
+    else if (s === 'Fail' || s === 'Defect' || s === 'No' || s === 'CNC') {
+      fail++;
+      if (v.severity && v.severity.startsWith('5')) hasSev5Fail = true;
+    }
+    else if (s === 'Maintenance' || s === 'RFI' || s === 'NC') maint++;
+    else if (s === 'N/A' || s === 'NA') na++;
+  });
+  const total = itemList.length;
+  const score = total ? Math.round(((pass + na) / total) * 100) : 0;
+  const scoreColor = hasSev5Fail ? '#dc2626' : score >= 90 ? '#16a34a' : score >= 70 ? '#65a30d' : score >= 50 ? '#d97706' : '#dc2626';
+  const completed = pass + fail + maint + na;
+
+  let html = '';
+
+  /* Inspection type selector */
+  html += `<div class="mb-insp-types">
+    ${INSPECTION_TYPES.map(t => {
+      const short = t.name.split('(')[0].split('—')[0].trim().split(' ').slice(0, 3).join(' ');
+      return `<button class="${t.id === cur ? 'active' : ''}" onclick="mbSelectInspection('${t.id}')">${esc(short)}</button>`;
+    }).join('')}
+  </div>`;
+
+  /* Fail banner if Sev 5 */
+  if (hasSev5Fail) {
+    html += `<div class="mb-fail-banner">
+      <span style="font-size:20px">⚠</span>
+      <div style="flex:1">
+        <div>INSPECTION FAILED</div>
+        <div style="font-size:11px;font-weight:400;opacity:.9;margin-top:2px">One or more items rated severity 5 (Urgent/Safety)</div>
+      </div>
+    </div>`;
+  }
+
+  /* Score card */
+  html += `<div class="mb-score-card">
+    <div class="mb-score-row">
+      <div class="mb-score-circle" style="background:${scoreColor}">${score}%</div>
+      <div class="mb-score-label">
+        <div class="label">${esc(insp.name.split('(')[0].trim())}</div>
+        <div class="stats">${completed} of ${total} items</div>
+      </div>
+    </div>
+    <div class="mb-progress-bar"><div class="mb-progress-fill" style="width:${total ? (completed/total)*100 : 0}%;background:${scoreColor}"></div></div>
+    <div style="display:flex;gap:6px;flex-wrap:wrap;font-size:11px;font-weight:600">
+      ${pass ? `<span class="mb-chip" style="background:#dcfce7;color:#166534">✓ ${pass} Pass</span>` : ''}
+      ${fail ? `<span class="mb-chip" style="background:#fee2e2;color:#991b1b">✗ ${fail} Fail</span>` : ''}
+      ${maint ? `<span class="mb-chip" style="background:#fef3c7;color:#92400e">⚠ ${maint} Maint</span>` : ''}
+      ${na ? `<span class="mb-chip">— ${na} N/A</span>` : ''}
+      ${total - completed ? `<span class="mb-chip">○ ${total - completed} pending</span>` : ''}
+    </div>
+  </div>`;
+
+  /* Search and filters */
+  html += `<div class="mb-search">
+    <input type="search" placeholder="🔍 Search items..." value="${esc(MOBILE_STATE.searchQuery)}" oninput="mbSearchItems(this.value)">
+    <div class="mb-filter-chips">
+      <button class="${MOBILE_STATE.filterStatus === 'all' ? 'active' : ''}" onclick="mbFilterItems('all')">All</button>
+      <button class="${MOBILE_STATE.filterStatus === 'pending' ? 'active' : ''}" onclick="mbFilterItems('pending')">Pending</button>
+      <button class="${MOBILE_STATE.filterStatus === 'failed' ? 'active' : ''}" onclick="mbFilterItems('failed')">Failed</button>
+      <button class="${MOBILE_STATE.filterStatus === 'maintenance' ? 'active' : ''}" onclick="mbFilterItems('maintenance')">Maint</button>
+      <button class="${MOBILE_STATE.filterStatus === 'pass' ? 'active' : ''}" onclick="mbFilterItems('pass')">Pass</button>
+    </div>
+  </div>`;
+
+  /* Group items by section */
+  const bySection = {};
+  itemList.forEach(item => {
+    if (!bySection[item.section]) bySection[item.section] = [];
+    bySection[item.section].push(item);
+  });
+
+  /* Apply search and filter */
+  const q = MOBILE_STATE.searchQuery.toLowerCase();
+  const filterFn = (item) => {
+    if (q && !item.label.toLowerCase().includes(q)) return false;
+    const v = checks[item.key] || {};
+    const s = v.status;
+    if (MOBILE_STATE.filterStatus === 'pending') return !s;
+    if (MOBILE_STATE.filterStatus === 'failed') return s === 'Fail' || s === 'Defect' || s === 'CNC';
+    if (MOBILE_STATE.filterStatus === 'maintenance') return s === 'Maintenance' || s === 'RFI' || s === 'NC';
+    if (MOBILE_STATE.filterStatus === 'pass') return s === 'Pass' || s === 'Compliant';
+    return true;
+  };
+
+  /* Render each section */
+  Object.keys(bySection).forEach((secName, secIdx) => {
+    const items = bySection[secName].filter(filterFn);
+    if (!items.length) return;
+    const sectionId = `sec_${secIdx}`;
+    const isOpen = MOBILE_STATE.sectionsOpen[sectionId] !== false; // default open
+
+    /* Section stats */
+    let sP = 0, sF = 0, sM = 0;
+    bySection[secName].forEach(({key}) => {
+      const v = checks[key];
+      if (!v) return;
+      if (v.status === 'Pass' || v.status === 'Compliant') sP++;
+      else if (v.status === 'Fail' || v.status === 'Defect') sF++;
+      else if (v.status === 'Maintenance') sM++;
+    });
+    const total = bySection[secName].length;
+    const progressClass = sF > 0 ? 'fail' : (sP + (bySection[secName].filter(({key}) => (checks[key]||{}).status === 'N/A').length)) === total ? 'done' : '';
+
+    html += `<div class="mb-section">
+      <div class="mb-section-header" onclick="mbToggleSection('${sectionId}')">
+        <span class="mb-section-title">${esc(secName)}</span>
+        <span class="mb-section-progress ${progressClass}">${sP+sM+sF}/${total} ${isOpen ? '▼' : '▶'}</span>
+      </div>
+      ${isOpen ? `<div class="mb-items-list">
+        ${items.map(item => renderMobileItemCard(item, checks)).join('')}
+      </div>` : ''}
+    </div>`;
+  });
+
+  return html;
+}
+
+function renderMobileItemCard(item, checks) {
+  const v = checks[item.key] || {};
+  const isExpanded = MOBILE_STATE.expandedItem === item.key;
+  const status = v.status;
+  let cardClass = '';
+  if (status === 'Pass' || status === 'Compliant') cardClass = 'pass';
+  else if (status === 'Fail' || status === 'Defect') cardClass = 'fail';
+  else if (status === 'Maintenance') cardClass = 'maintenance';
+  else if (status === 'N/A') cardClass = 'na';
+
+  const sevNum = v.severity ? parseInt(v.severity) : 0;
+  const photoCount = (v.photos || []).length;
+
+  let card = `<div class="mb-item-card ${cardClass}" id="card_${item.key}">
+    <div onclick="mbToggleItem('${item.key}')">
+      <div class="mb-item-cat">${esc(item.section)}</div>
+      <div class="mb-item-title">${esc(item.label)}</div>
+      ${!isExpanded ? `<div class="mb-status-row">
+        ${renderQuickStatusButtons(item.key, status, true)}
+      </div>` : ''}
+      ${!isExpanded && (photoCount || sevNum || v.notes) ? `<div class="mb-card-chips">
+        ${sevNum ? `<span class="mb-chip"><span class="mb-sev-dot mb-sev-${sevNum}"></span>Sev ${sevNum}</span>` : ''}
+        ${photoCount ? `<span class="mb-chip">📷 ${photoCount}</span>` : ''}
+        ${v.notes ? `<span class="mb-chip">📝 Note</span>` : ''}
+        ${v.assignee ? `<span class="mb-chip">👷 ${esc(v.assignee.slice(0, 12))}</span>` : ''}
+      </div>` : ''}
+    </div>
+    ${isExpanded ? renderItemDetail(item, v) : ''}
+  </div>`;
+  return card;
+}
+
+function renderQuickStatusButtons(key, currentStatus, compact) {
+  const opts = [
+    { val: 'Pass', label: 'Pass', cls: 'pass-active' },
+    { val: 'Fail', label: 'Fail', cls: 'fail-active' },
+    { val: 'N/A', label: 'N/A', cls: 'na-active' }
+  ];
+  return opts.map(o => `<button class="mb-status-btn ${currentStatus === o.val ? o.cls : ''}" onclick="event.stopPropagation();mbSetStatus('${key}','${o.val}')">${o.label}</button>`).join('');
+}
+
+function renderItemDetail(item, v) {
+  const status = v.status;
+  const isFail = status === 'Fail' || status === 'Defect' || status === 'Maintenance';
+
+  let h = `<div class="mb-item-detail">
+    <span class="mb-detail-label">Status</span>
+    <div class="mb-status-row">
+      <button class="mb-status-btn ${status === 'Pass' ? 'pass-active' : ''}" onclick="mbSetStatus('${item.key}','Pass')">✓ Pass</button>
+      <button class="mb-status-btn ${status === 'Fail' ? 'fail-active' : ''}" onclick="mbSetStatus('${item.key}','Fail')">✗ Fail</button>
+      <button class="mb-status-btn ${status === 'Maintenance' ? 'maint-active' : ''}" onclick="mbSetStatus('${item.key}','Maintenance')">⚠ Maint</button>
+      <button class="mb-status-btn ${status === 'N/A' ? 'na-active' : ''}" onclick="mbSetStatus('${item.key}','N/A')">— N/A</button>
+    </div>
+  `;
+
+  /* Conditional: severity only if Fail or Maintenance */
+  if (isFail) {
+    h += `<span class="mb-detail-label">Severity ${status === 'Fail' ? '(required)' : ''}</span>
+    <div class="mb-detail-sev">
+      ${[1,2,3,4,5].map(n => `<button class="${(v.severity && parseInt(v.severity) === n) ? `active sev-${n}` : ''}" onclick="mbSetSeverity('${item.key}',${n})">${n}</button>`).join('')}
+    </div>
+    <div style="font-size:10px;color:#64748b;margin-top:4px;display:flex;justify-content:space-between">
+      <span>Negligible</span><span>Minor</span><span>Moderate</span><span>Major</span><span>Urgent</span>
+    </div>`;
+  }
+
+  /* Notes with voice */
+  h += `<span class="mb-detail-label">Observation notes</span>
+    <div class="mb-notes-row">
+      <textarea class="mb-detail-input" id="note_${item.key}" placeholder="Tap to type, or use 🎙 voice..." onchange="mbSetField('${item.key}','notes',this.value)">${esc(v.notes || '')}</textarea>
+      ${('webkitSpeechRecognition' in window || 'SpeechRecognition' in window) ? `<button class="mb-voice-btn ${MOBILE_STATE.voiceRecording && MOBILE_STATE.voiceTargetKey === item.key ? 'recording' : ''}" onclick="mbToggleVoice('${item.key}')" aria-label="Voice note">${MOBILE_STATE.voiceRecording && MOBILE_STATE.voiceTargetKey === item.key ? '⏹' : '🎙'}</button>` : ''}
+    </div>`;
+
+  /* Photo grid */
+  h += `<span class="mb-detail-label">Photos (${(v.photos || []).length})</span>
+    <div class="mb-photo-grid">
+      ${(v.photos || []).map((p, pi) => `
+        <div class="mb-photo-thumb">
+          <img src="${p.data}" alt="" onclick="mbViewPhoto('${item.key}',${pi})">
+          <button class="mb-photo-del" onclick="event.stopPropagation();mbDeletePhoto('${item.key}',${pi})">×</button>
+        </div>
+      `).join('')}
+      <div class="mb-photo-thumb mb-photo-add" onclick="mbCapturePhotos('${item.key}')">+</div>
+    </div>`;
+
+  /* Action buttons */
+  h += `<div class="mb-detail-actions">
+    <button class="mb-detail-btn orange" onclick="mbOpenDefectLib('${item.key}')">🔍 Defect library</button>
+    <button class="mb-detail-btn" onclick="mbAssignAction('${item.key}')">👷 Assign action</button>
+  </div>`;
+
+  /* Internal-only fields (cost, assignee — hidden from client reports) */
+  if (isFail) {
+    h += `<details style="margin-top:10px"><summary style="font-size:12px;color:#64748b;font-weight:700;text-transform:uppercase;letter-spacing:1px;padding:6px 0">⚙ Internal fields (not on client reports)</summary>
+      <span class="mb-detail-label">Estimated cost (AUD)</span>
+      <input type="number" class="mb-detail-input" placeholder="e.g. 2500" value="${v.cost || ''}" oninput="mbSetField('${item.key}','cost',this.value)">
+      <span class="mb-detail-label">Recommended trade</span>
+      <input type="text" class="mb-detail-input" placeholder="e.g. Carpenter" value="${esc(v.suggestedTrade || v.assignee || '')}" oninput="mbSetField('${item.key}','assignee',this.value)">
+      <span class="mb-detail-label">Internal notes</span>
+      <textarea class="mb-detail-input" placeholder="Internal-only notes" oninput="mbSetField('${item.key}','internalNotes',this.value)">${esc(v.internalNotes || '')}</textarea>
+    </details>`;
+  }
+
+  h += `<div style="text-align:center;margin-top:14px">
+    <button class="mb-detail-btn" style="background:transparent;border:none;color:#64748b;font-size:12px" onclick="mbToggleItem('${item.key}')">▲ Collapse</button>
+  </div>`;
+  h += `</div>`;
+  return h;
+}
+
+/* ---------- INTERACTION HANDLERS ---------- */
+window.mbToggleItem = function(key) {
+  haptic(8);
+  MOBILE_STATE.expandedItem = (MOBILE_STATE.expandedItem === key) ? null : key;
+  renderMobilePage();
+};
+
+window.mbToggleSection = function(sectionId) {
+  haptic(8);
+  const current = MOBILE_STATE.sectionsOpen[sectionId];
+  MOBILE_STATE.sectionsOpen[sectionId] = current === false ? true : false;
+  renderMobilePage();
+};
+
+window.mbSetStatus = function(key, status) {
+  haptic(status === 'Fail' ? [12, 50, 12] : 10);
+  const cur = PROJECT.inspections.currentType;
+  if (!PROJECT.inspections[cur]) PROJECT.inspections[cur] = {};
+  if (!PROJECT.inspections[cur][key]) PROJECT.inspections[cur][key] = {};
+  PROJECT.inspections[cur][key].status = status;
+  /* Auto-save trigger */
+  if (typeof saveProject === 'function') saveProject(true);
+  renderMobilePage();
+};
+
+window.mbSetSeverity = function(key, n) {
+  haptic(8);
+  const labels = ['', '1 Negligible', '2 Minor', '3 Moderate', '4 Major', '5 Urgent / Safety'];
+  const cur = PROJECT.inspections.currentType;
+  if (!PROJECT.inspections[cur][key]) PROJECT.inspections[cur][key] = {};
+  PROJECT.inspections[cur][key].severity = labels[n];
+  if (n === 5) haptic([20, 50, 20, 50, 20]); /* stronger feedback for Sev 5 */
+  if (typeof saveProject === 'function') saveProject(true);
+  renderMobilePage();
+};
+
+window.mbSetField = function(key, field, value) {
+  const cur = PROJECT.inspections.currentType;
+  if (!PROJECT.inspections[cur][key]) PROJECT.inspections[cur][key] = {};
+  PROJECT.inspections[cur][key][field] = value;
+};
+
+window.mbSelectInspection = function(id) {
+  haptic(8);
+  PROJECT.inspections.currentType = id;
+  MOBILE_STATE.expandedItem = null;
+  MOBILE_STATE.sectionsOpen = {};
+  renderMobilePage();
+};
+
+window.mbSearchItems = function(value) {
+  MOBILE_STATE.searchQuery = value;
+  renderMobilePage();
+  /* Refocus search input after render */
+  setTimeout(() => {
+    const inp = document.querySelector('.mb-search input');
+    if (inp) {
+      inp.focus();
+      inp.setSelectionRange(value.length, value.length);
+    }
+  }, 50);
+};
+
+window.mbFilterItems = function(status) {
+  haptic(8);
+  MOBILE_STATE.filterStatus = status;
+  renderMobilePage();
+};
+
+/* ---------- IN-CAMERA BULK CAPTURE ---------- */
+window.mbCapturePhotos = function(key) {
+  haptic(8);
+  const input = document.createElement('input');
+  input.type = 'file';
+  input.accept = 'image/*';
+  input.capture = 'environment'; /* opens camera on mobile, rear-facing */
+  input.multiple = true;
+  input.style.display = 'none';
+  input.onchange = (e) => {
+    const files = e.target.files;
+    if (!files || !files.length) return;
+    addPhotosToItem(key, files);
+  };
+  document.body.appendChild(input);
+  input.click();
+};
+
+function addPhotosToItem(key, files) {
+  const cur = PROJECT.inspections.currentType;
+  if (!PROJECT.inspections[cur][key]) PROJECT.inspections[cur][key] = {};
+  if (!PROJECT.inspections[cur][key].photos) PROJECT.inspections[cur][key].photos = [];
+  let pending = files.length;
+  showToast(`Processing ${pending} photo${pending > 1 ? 's' : ''}...`);
+  Array.from(files).forEach(f => {
+    const reader = new FileReader();
+    reader.onload = (e) => {
+      const img = new Image();
+      img.onload = () => {
+        const maxDim = 1400;
+        let w = img.width, h = img.height;
+        if (w > maxDim || h > maxDim) {
+          if (w > h) { h = h * maxDim / w; w = maxDim; }
+          else { w = w * maxDim / h; h = maxDim; }
+        }
+        const canvas = document.createElement('canvas');
+        canvas.width = w; canvas.height = h;
+        canvas.getContext('2d').drawImage(img, 0, 0, w, h);
+        const data = canvas.toDataURL('image/jpeg', 0.78);
+        PROJECT.inspections[cur][key].photos.push({ data, caption: '', ts: Date.now(), name: f.name });
+        pending--;
+        if (pending === 0) {
+          haptic([10, 30, 10]);
+          showToast(`✓ Added ${files.length} photo${files.length > 1 ? 's' : ''}`, 'ok');
+          if (typeof saveProject === 'function') saveProject(true);
+          renderMobilePage();
+        }
+      };
+      img.src = e.target.result;
+    };
+    reader.readAsDataURL(f);
+  });
+}
+
+window.mbDeletePhoto = function(key, idx) {
+  if (!confirm('Delete this photo?')) return;
+  haptic(8);
+  const cur = PROJECT.inspections.currentType;
+  PROJECT.inspections[cur][key].photos.splice(idx, 1);
+  if (typeof saveProject === 'function') saveProject(true);
+  renderMobilePage();
+};
+
+window.mbViewPhoto = function(key, idx) {
+  const cur = PROJECT.inspections.currentType;
+  const p = PROJECT.inspections[cur][key].photos[idx];
+  if (!p) return;
+  mbBottomSheet('Photo', `
+    <img src="${p.data}" style="width:100%;border-radius:10px;margin-bottom:10px">
+    <span class="mb-detail-label">Caption</span>
+    <input type="text" class="mb-detail-input" id="mb_cap_${key}_${idx}" value="${esc(p.caption || '')}" placeholder="Add a caption...">
+    <div class="mb-detail-actions" style="margin-top:14px">
+      <button class="mb-detail-btn" onclick="mbAnnotatePhotoFromSheet('${key}',${idx})">✏ Annotate</button>
+      <button class="mb-detail-btn primary" onclick="mbSaveCaption('${key}',${idx})">✓ Done</button>
+    </div>
+  `);
+};
+
+window.mbSaveCaption = function(key, idx) {
+  const inp = document.getElementById(`mb_cap_${key}_${idx}`);
+  if (inp) {
+    const cur = PROJECT.inspections.currentType;
+    PROJECT.inspections[cur][key].photos[idx].caption = inp.value;
+    if (typeof saveProject === 'function') saveProject(true);
+  }
+  mbCloseSheet();
+  renderMobilePage();
+};
+
+window.mbAnnotatePhotoFromSheet = function(key, idx) {
+  mbCloseSheet();
+  /* Reuse existing annotatePhoto function */
+  const cur = PROJECT.inspections.currentType;
+  if (typeof annotatePhoto === 'function') {
+    annotatePhoto(cur, key, idx);
+  }
+};
+
+/* ---------- VOICE TO TEXT ---------- */
+let mbRecognition = null;
+
+window.mbToggleVoice = function(key) {
+  const Recognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+  if (!Recognition) {
+    showToast('Voice not supported on this browser', 'err');
+    return;
+  }
+  if (MOBILE_STATE.voiceRecording) {
+    if (mbRecognition) mbRecognition.stop();
+    MOBILE_STATE.voiceRecording = false;
+    MOBILE_STATE.voiceTargetKey = null;
+    renderMobilePage();
+    return;
+  }
+  mbRecognition = new Recognition();
+  mbRecognition.continuous = true;
+  mbRecognition.interimResults = true;
+  mbRecognition.lang = 'en-AU';
+  
+  const cur = PROJECT.inspections.currentType;
+  if (!PROJECT.inspections[cur][key]) PROJECT.inspections[cur][key] = {};
+  const startingNote = PROJECT.inspections[cur][key].notes || '';
+  let finalTranscript = startingNote;
+  
+  mbRecognition.onresult = (event) => {
+    let interim = '';
+    for (let i = event.resultIndex; i < event.results.length; i++) {
+      const transcript = event.results[i][0].transcript;
+      if (event.results[i].isFinal) {
+        finalTranscript += (finalTranscript && !finalTranscript.endsWith(' ') ? ' ' : '') + transcript.trim();
+      } else {
+        interim += transcript;
+      }
+    }
+    const noteField = document.getElementById(`note_${key}`);
+    if (noteField) {
+      noteField.value = finalTranscript + (interim ? ' ' + interim : '');
+    }
+    PROJECT.inspections[cur][key].notes = finalTranscript;
+  };
+  
+  mbRecognition.onerror = (e) => {
+    console.error('Speech error', e);
+    showToast('Voice error: ' + e.error, 'err');
+    MOBILE_STATE.voiceRecording = false;
+    MOBILE_STATE.voiceTargetKey = null;
+    renderMobilePage();
+  };
+  
+  mbRecognition.onend = () => {
+    MOBILE_STATE.voiceRecording = false;
+    MOBILE_STATE.voiceTargetKey = null;
+    if (typeof saveProject === 'function') saveProject(true);
+    renderMobilePage();
+  };
+  
+  mbRecognition.start();
+  haptic([10, 30, 10]);
+  MOBILE_STATE.voiceRecording = true;
+  MOBILE_STATE.voiceTargetKey = key;
+  renderMobilePage();
+  showToast('🎙 Listening... tap mic to stop', 'ok');
+};
+
+/* ---------- DEFECT LIBRARY (mobile) ---------- */
+window.mbOpenDefectLib = function(key) {
+  haptic(8);
+  const cur = PROJECT.inspections.currentType;
+  const content = `
+    <input type="search" class="mb-detail-input" id="mb-def-search" placeholder="🔍 Search 684 defects..." oninput="mbRenderDefectList('${key}')">
+    <div class="mb-filter-chips" style="margin-top:8px">
+      <button class="active" onclick="mbDefSevFilter('','${key}')">All</button>
+      <button onclick="mbDefSevFilter('5','${key}')" style="background:#dc2626;color:#fff;border-color:#dc2626">Sev 5</button>
+      <button onclick="mbDefSevFilter('4','${key}')" style="background:#ea580c;color:#fff;border-color:#ea580c">Sev 4</button>
+      <button onclick="mbDefSevFilter('3','${key}')" style="background:#d97706;color:#fff;border-color:#d97706">Sev 3</button>
+      <button onclick="mbDefSevFilter('2','${key}')" style="background:#65a30d;color:#fff;border-color:#65a30d">Sev 2</button>
+    </div>
+    <div id="mb-def-list" style="margin-top:10px"></div>
+  `;
+  mbBottomSheet('Defect Library', content);
+  setTimeout(() => mbRenderDefectList(key), 50);
+};
+
+let mbDefSevFilterValue = '';
+window.mbDefSevFilter = function(sev, key) {
+  mbDefSevFilterValue = sev;
+  document.querySelectorAll('.mb-sheet .mb-filter-chips button').forEach(b => b.classList.remove('active'));
+  event.target.classList.add('active');
+  mbRenderDefectList(key);
+};
+
+window.mbRenderDefectList = function(key) {
+  const q = (document.getElementById('mb-def-search')?.value || '').toLowerCase();
+  let h = '';
+  let count = 0;
+  DEFECT_LIBRARY.forEach((cat, ci) => {
+    const matching = cat.issues.filter((it, ii) => {
+      if (mbDefSevFilterValue && !it.sev.startsWith(mbDefSevFilterValue)) return false;
+      if (!q) return true;
+      return it.desc.toLowerCase().includes(q) || (it.ref || '').toLowerCase().includes(q) || cat.cat.toLowerCase().includes(q);
+    });
+    if (!matching.length) return;
+    h += `<div style="margin-top:10px"><div style="font-size:11px;text-transform:uppercase;letter-spacing:1px;color:#64748b;font-weight:700;margin-bottom:4px">${esc(cat.cat)}</div>`;
+    matching.forEach(it => {
+      const ii = cat.issues.indexOf(it);
+      const sevNum = parseInt(it.sev) || 0;
+      const sevColor = sevNum >= 5 ? '#dc2626' : sevNum >= 4 ? '#ea580c' : sevNum >= 3 ? '#d97706' : sevNum >= 2 ? '#65a30d' : '#6b7280';
+      h += `<div onclick="mbApplyDefect(${ci},${ii},'${key}')" style="padding:10px;background:#fff;border:1.5px solid #e5e7eb;border-left:4px solid ${sevColor};border-radius:8px;margin-bottom:5px;cursor:pointer">
+        <div style="font-size:13px;font-weight:600;color:#0D1B2A;line-height:1.4">${esc(it.desc)}</div>
+        <div style="font-size:11px;color:#64748b;margin-top:3px">
+          <span style="color:${sevColor};font-weight:700">⬤ ${esc(it.sev)}</span>
+          · ${esc(it.ref || '—')}
+        </div>
+      </div>`;
+      count++;
+    });
+    h += '</div>';
+  });
+  const list = document.getElementById('mb-def-list');
+  if (list) {
+    list.innerHTML = `<div style="font-size:11px;color:#64748b;margin-bottom:6px">Showing ${count} defects</div>${h || '<p style="color:#94a3b8;text-align:center;padding:20px">No defects match</p>'}`;
+  }
+};
+
+window.mbApplyDefect = function(ci, ii, key) {
+  haptic([10, 30, 10]);
+  const cat = DEFECT_LIBRARY[ci];
+  const issue = cat.issues[ii];
+  const cur = PROJECT.inspections.currentType;
+  if (!PROJECT.inspections[cur][key]) PROJECT.inspections[cur][key] = {};
+  const item = PROJECT.inspections[cur][key];
+  item.status = 'Fail';
+  item.severity = issue.sev;
+  const existing = item.notes || '';
+  item.notes = (existing ? existing + '\n\n' : '') + issue.desc + '\n[Ref: ' + issue.ref + ']';
+  item.internalNotes = (item.internalNotes || '') + (item.internalNotes ? '\n' : '') + `[Trade: ${issue.trade}] [Cost: ${issue.cost}]`;
+  /* Try to parse cost mid-point */
+  const costMatch = (issue.cost || '').match(/\$?([0-9,]+)[^0-9]+\$?([0-9,]+)/);
+  if (costMatch && !item.cost) {
+    const lo = parseFloat(costMatch[1].replace(/,/g, ''));
+    const hi = parseFloat(costMatch[2].replace(/,/g, ''));
+    item.cost = Math.round((lo + hi) / 2);
+  }
+  item.suggestedTrade = issue.trade;
+  mbCloseSheet();
+  if (typeof saveProject === 'function') saveProject(true);
+  showToast('✓ Defect applied', 'ok');
+  renderMobilePage();
+};
+
+/* ---------- ASSIGN ACTION ---------- */
+window.mbAssignAction = function(key) {
+  const cur = PROJECT.inspections.currentType;
+  const item = PROJECT.inspections[cur][key] || {};
+  mbBottomSheet('Assign Corrective Action', `
+    <span class="mb-detail-label">Assign to (trade or person)</span>
+    <input type="text" class="mb-detail-input" id="mb_assign_assignee" value="${esc(item.assignee || item.suggestedTrade || '')}" placeholder="e.g. Carpenter, Builder, J. Smith">
+    <span class="mb-detail-label">Due date</span>
+    <input type="date" class="mb-detail-input" id="mb_assign_due" value="${esc(item.dueDate || '')}">
+    <span class="mb-detail-label">Status</span>
+    <select class="mb-detail-input" id="mb_assign_status">
+      ${['Open','In Progress','Awaiting Materials','Complete','Closed'].map(s => `<option ${item.actionStatus === s ? 'selected' : ''}>${s}</option>`).join('')}
+    </select>
+    <div class="mb-detail-actions" style="margin-top:14px">
+      <button class="mb-detail-btn" onclick="mbCloseSheet()">Cancel</button>
+      <button class="mb-detail-btn primary" onclick="mbSaveAssignment('${key}')">✓ Save</button>
+    </div>
+  `);
+};
+
+window.mbSaveAssignment = function(key) {
+  const cur = PROJECT.inspections.currentType;
+  if (!PROJECT.inspections[cur][key]) PROJECT.inspections[cur][key] = {};
+  PROJECT.inspections[cur][key].assignee = document.getElementById('mb_assign_assignee').value;
+  PROJECT.inspections[cur][key].dueDate = document.getElementById('mb_assign_due').value;
+  PROJECT.inspections[cur][key].actionStatus = document.getElementById('mb_assign_status').value;
+  if (typeof saveProject === 'function') saveProject(true);
+  mbCloseSheet();
+  showToast('✓ Action assigned', 'ok');
+  renderMobilePage();
+};
+
+window.mbEditClient = function() {
+  const c = PROJECT.client || {};
+  mbBottomSheet('Edit Project Details', `
+    <span class="mb-detail-label">Property address</span>
+    <input type="text" class="mb-detail-input" id="mb_cli_addr" value="${esc(c.address || '')}" placeholder="e.g. 123 Main St, Suburb">
+    <span class="mb-detail-label">Client name</span>
+    <input type="text" class="mb-detail-input" id="mb_cli_name" value="${esc(c.name || '')}" placeholder="Client full name">
+    <span class="mb-detail-label">Client email</span>
+    <input type="email" class="mb-detail-input" id="mb_cli_email" value="${esc(c.email || '')}">
+    <span class="mb-detail-label">Client phone</span>
+    <input type="tel" class="mb-detail-input" id="mb_cli_phone" value="${esc(c.phone || '')}">
+    <span class="mb-detail-label">Building class</span>
+    <input type="text" class="mb-detail-input" id="mb_cli_class" value="${esc(c.class || '')}" placeholder="e.g. 1a, 2, 10a">
+    <div class="mb-detail-actions" style="margin-top:14px">
+      <button class="mb-detail-btn" onclick="mbCloseSheet()">Cancel</button>
+      <button class="mb-detail-btn primary" onclick="mbSaveClient()">✓ Save</button>
+    </div>
+  `);
+};
+
+window.mbSaveClient = function() {
+  PROJECT.client = PROJECT.client || {};
+  PROJECT.client.address = document.getElementById('mb_cli_addr').value;
+  PROJECT.client.name = document.getElementById('mb_cli_name').value;
+  PROJECT.client.email = document.getElementById('mb_cli_email').value;
+  PROJECT.client.phone = document.getElementById('mb_cli_phone').value;
+  PROJECT.client.class = document.getElementById('mb_cli_class').value;
+  if (typeof saveProject === 'function') saveProject(true);
+  mbCloseSheet();
+  showToast('✓ Project details saved', 'ok');
+  renderMobilePage();
+};
+
+/* ---------- PHOTOS TAB ---------- */
+function renderMobilePhotos() {
+  const cur = PROJECT.inspections.currentType;
+  const insp = INSPECTION_TYPES.find(i => i.id === cur);
+  if (!insp) return '<p>No inspection selected.</p>';
+  const checks = PROJECT.inspections[cur] || {};
+  
+  /* Gather all photos */
+  const allPhotos = [];
+  Object.keys(checks).forEach(key => {
+    const v = checks[key];
+    if (v && v.photos) {
+      v.photos.forEach((p, pi) => {
+        const itemLabel = mbFindItemLabel(insp, key);
+        allPhotos.push({ key, pi, photo: p, itemLabel });
+      });
+    }
+  });
+
+  let h = `<h2 style="color:#0D1B2A;font-family:'Barlow Condensed';text-transform:uppercase;letter-spacing:1px;margin:8px 0 14px">All Photos (${allPhotos.length})</h2>`;
+  
+  if (!allPhotos.length) {
+    h += `<div style="text-align:center;padding:40px 20px;color:#94a3b8;background:#fff;border-radius:12px">
+      <div style="font-size:48px;margin-bottom:14px">📷</div>
+      <p>No photos yet. Add photos to inspection items.</p>
+      <button class="mb-detail-btn primary" style="margin-top:14px" onclick="mbSwitchTab('inspect')">Go to Inspect</button>
+    </div>`;
+  } else {
+    h += `<div class="mb-photo-grid" style="grid-template-columns:repeat(2,1fr)">`;
+    allPhotos.forEach(({key, pi, photo, itemLabel}) => {
+      h += `<div class="mb-photo-thumb" style="aspect-ratio:1" onclick="mbJumpToItemWithPhoto('${key}',${pi})">
+        <img src="${photo.data}" alt="">
+        <div style="position:absolute;bottom:0;left:0;right:0;background:linear-gradient(transparent,rgba(0,0,0,.7));color:#fff;padding:8px 6px 6px;font-size:10px;line-height:1.3">
+          ${esc(itemLabel.slice(0, 50))}
+        </div>
+      </div>`;
+    });
+    h += '</div>';
+  }
+  return h;
+}
+
+function mbFindItemLabel(insp, key) {
+  if (key.startsWith('item_')) {
+    const i = parseInt(key.slice(5));
+    return (insp.items && insp.items[i]) || key;
+  }
+  if (key.startsWith('stage_')) {
+    const [_, si, ci] = key.split('_');
+    return (insp.stages && insp.stages[+si] && insp.stages[+si].chk && insp.stages[+si].chk[+ci]) || key;
+  }
+  if (key.startsWith('rms_')) {
+    const i = parseInt(key.slice(4));
+    return (insp.standards14 && insp.standards14[i]) || key;
+  }
+  return key;
+}
+
+window.mbJumpToItemWithPhoto = function(key, pi) {
+  MOBILE_STATE.activeTab = 'inspect';
+  MOBILE_STATE.expandedItem = key;
+  renderMobilePage();
+  setTimeout(() => {
+    const card = document.getElementById(`card_${key}`);
+    if (card) card.scrollIntoView({ behavior: 'smooth', block: 'center' });
+  }, 100);
+};
+
+/* ---------- ACTIONS TAB ---------- */
+function renderMobileActions() {
+  /* Collect all defects across all inspections */
+  const items = [];
+  Object.keys(PROJECT.inspections || {}).forEach(inspId => {
+    if (inspId === 'currentType' || inspId.startsWith('_')) return;
+    const insp = INSPECTION_TYPES.find(i => i.id === inspId);
+    if (!insp) return;
+    Object.keys(PROJECT.inspections[inspId]).forEach(key => {
+      const v = PROJECT.inspections[inspId][key];
+      if (!v || !v.status) return;
+      if (v.status === 'Fail' || v.status === 'Defect' || v.status === 'Maintenance' || v.status === 'RFI') {
+        items.push({
+          inspId, key, v,
+          label: mbFindItemLabel(insp, key),
+          inspName: insp.name
+        });
+      }
+    });
+  });
+  /* Sort by severity descending */
+  items.sort((a, b) => {
+    const sevA = parseInt(a.v.severity) || 0;
+    const sevB = parseInt(b.v.severity) || 0;
+    return sevB - sevA;
+  });
+
+  const sevCount = {5:0,4:0,3:0,2:0,1:0};
+  items.forEach(i => {
+    const n = parseInt(i.v.severity) || 0;
+    if (sevCount[n] !== undefined) sevCount[n]++;
+  });
+
+  let h = `<h2 style="color:#0D1B2A;font-family:'Barlow Condensed';text-transform:uppercase;letter-spacing:1px;margin:8px 0 8px">Action Items (${items.length})</h2>`;
+  
+  if (sevCount[5]) {
+    h += `<div class="mb-fail-banner" style="background:#dc2626"><span>⚠</span><div style="flex:1"><div>${sevCount[5]} urgent item${sevCount[5] > 1 ? 's' : ''}</div><div style="font-size:11px;font-weight:400;opacity:.9">Severity 5 — priority attention</div></div></div>`;
+  }
+
+  if (!items.length) {
+    h += `<div style="text-align:center;padding:40px 20px;color:#94a3b8;background:#fff;border-radius:12px">
+      <div style="font-size:48px;margin-bottom:14px">✓</div>
+      <p>No outstanding actions. All inspections clear.</p>
+    </div>`;
+  } else {
+    items.forEach(i => {
+      const sevNum = parseInt(i.v.severity) || 0;
+      const sevColor = sevNum >= 5 ? '#dc2626' : sevNum >= 4 ? '#ea580c' : sevNum >= 3 ? '#d97706' : sevNum >= 2 ? '#65a30d' : '#6b7280';
+      const overdue = i.v.dueDate && new Date(i.v.dueDate) < new Date() && i.v.actionStatus !== 'Complete' && i.v.actionStatus !== 'Closed';
+      h += `<div class="mb-item-card" style="border-left-color:${sevColor}" onclick="mbJumpToActionItem('${i.inspId}','${i.key}')">
+        <div class="mb-item-cat">${esc(i.inspName.slice(0, 30))}</div>
+        <div class="mb-item-title">${esc(i.label)}</div>
+        <div class="mb-card-chips">
+          <span class="mb-chip" style="background:${sevColor};color:#fff">⬤ ${esc(i.v.severity || '—')}</span>
+          ${i.v.actionStatus ? `<span class="mb-chip">${esc(i.v.actionStatus)}</span>` : ''}
+          ${i.v.assignee ? `<span class="mb-chip">👷 ${esc(i.v.assignee.slice(0, 14))}</span>` : ''}
+          ${overdue ? `<span class="mb-chip" style="background:#dc2626;color:#fff">OVERDUE</span>` : ''}
+          ${i.v.dueDate ? `<span class="mb-chip">📅 ${esc(i.v.dueDate)}</span>` : ''}
+        </div>
+      </div>`;
+    });
+  }
+  return h;
+}
+
+window.mbJumpToActionItem = function(inspId, key) {
+  PROJECT.inspections.currentType = inspId;
+  MOBILE_STATE.activeTab = 'inspect';
+  MOBILE_STATE.expandedItem = key;
+  renderMobilePage();
+  setTimeout(() => {
+    const card = document.getElementById(`card_${key}`);
+    if (card) card.scrollIntoView({ behavior: 'smooth', block: 'center' });
+  }, 100);
+};
+
+/* ---------- REPORTS TAB ---------- */
+function renderMobileReports() {
+  const cur = PROJECT.inspections.currentType;
+  const insp = INSPECTION_TYPES.find(i => i.id === cur);
+  let h = `<h2 style="color:#0D1B2A;font-family:'Barlow Condensed';text-transform:uppercase;letter-spacing:1px;margin:8px 0 14px">Reports</h2>`;
+  
+  if (insp) {
+    h += `<div class="mb-section">
+      <div style="padding:14px">
+        <div class="mb-item-cat">Current inspection</div>
+        <div class="mb-item-title">${esc(insp.name)}</div>
+        <div style="margin-top:14px">
+          <button class="mb-detail-btn primary" style="width:100%;margin-bottom:6px" onclick="mbExportClientReport()">📄 Client report (no costs)</button>
+          <button class="mb-detail-btn" style="width:100%;margin-bottom:6px" onclick="mbExportInternalReport()">📄 Internal report (with costs)</button>
+          <button class="mb-detail-btn" style="width:100%;margin-bottom:6px" onclick="mbShareCurrentReport()">📧 Email / Share</button>
+        </div>
+      </div>
+    </div>`;
+  }
+
+  /* Saved inspection history */
+  const history = PROJECT.inspectionHistory || [];
+  h += `<div class="mb-section">
+    <div style="padding:14px">
+      <div class="mb-item-cat">Saved inspections (${history.length})</div>
+      <div style="margin-top:8px">
+        <button class="mb-detail-btn" style="width:100%" onclick="saveCurrentInspection()">💾 Save current inspection to history</button>
+      </div>
+      ${history.length ? history.slice().reverse().slice(0, 5).map(h => `
+        <div style="border-top:1px solid #e5e7eb;padding:10px 0;margin-top:10px;display:flex;align-items:center;gap:10px">
+          <div style="flex:1">
+            <div style="font-size:13px;font-weight:600">${esc((h.typeName || '').slice(0, 30))}</div>
+            <div style="font-size:11px;color:#64748b">${new Date(h.date).toLocaleDateString('en-AU')} · ${h.pass}✓ ${h.fail}✗</div>
+          </div>
+          <div style="background:${h.score >= 90 ? '#16a34a' : h.score >= 70 ? '#65a30d' : '#dc2626'};color:#fff;padding:4px 10px;border-radius:14px;font-weight:700;font-size:12px">${h.score}%</div>
+        </div>
+      `).join('') : ''}
+    </div>
+  </div>`;
+
+  /* Agreements */
+  const agreements = PROJECT.agreements || [];
+  h += `<div class="mb-section">
+    <div style="padding:14px">
+      <div class="mb-item-cat">Service agreements (${agreements.length})</div>
+      <div style="margin-top:8px">
+        <button class="mb-detail-btn primary" style="width:100%" onclick="openAgreementCreator()">➕ New agreement</button>
+      </div>
+    </div>
+  </div>`;
+
+  return h;
+}
+
+window.mbExportClientReport = function() {
+  exportClientInspectionHTML(PROJECT.inspections.currentType);
+};
+
+window.mbExportInternalReport = function() {
+  exportInternalInspectionHTML(PROJECT.inspections.currentType);
+};
+
+window.mbShareCurrentReport = function() {
+  if (typeof shareInspectionReport === 'function') {
+    shareInspectionReport(PROJECT.inspections.currentType, 'html');
+  }
+};
+
+/* ---------- CLIENT vs INTERNAL REPORTS ---------- */
+window.exportClientInspectionHTML = function(id) {
+  generateInspectionReport(id, false); /* false = no costs/internal */
+};
+window.exportInternalInspectionHTML = function(id) {
+  generateInspectionReport(id, true);  /* true = include costs/internal */
+};
+
+function generateInspectionReport(id, includeInternal) {
+  const insp = INSPECTION_TYPES.find(i => i.id === id);
+  const c = PROJECT.client || {};
+  const checks = PROJECT.inspections[id] || {};
+  const settings = PROJECT.settings || {};
+  let totCost = 0, totC = 0, totF = 0, totM = 0, totNA = 0, totP = 0;
+  Object.values(checks).forEach(v => {
+    if (!v) return;
+    if (v.cost) totCost += parseFloat(v.cost) || 0;
+    if (v.status === 'Pass' || v.status === 'Compliant') totC++;
+    else if (v.status === 'Fail' || v.status === 'Defect') totF++;
+    else if (v.status === 'Maintenance' || v.status === 'RFI') totM++;
+    else if (v.status === 'N/A' || v.status === 'NA') totNA++;
+    if (v.photos) totP += v.photos.length;
+  });
+
+  const reportType = includeInternal ? 'Internal Inspection Report' : 'Inspection Report';
+  const logo = settings.logoDataURL;
+
+  let body = `<!doctype html><html><head><meta charset="utf-8"><title>${esc(insp.name)} — ${esc(c.address || '')}</title>
+  <style>
+    body{font-family:Arial,sans-serif;max-width:920px;margin:30px auto;padding:0 20px;color:#1a1a2e;line-height:1.5}
+    h1{color:#fff}h2{color:#0D1B2A;border-left:5px solid #F05A28;padding-left:10px;margin-top:30px;font-size:18px}
+    table{width:100%;border-collapse:collapse;margin:10px 0}
+    th,td{border:1px solid #d2cec8;padding:6px 8px;text-align:left;font-size:13px;vertical-align:top}
+    th{background:#0D1B2A;color:#fff;font-size:11px;text-transform:uppercase;letter-spacing:1px}
+    .ok{background:#dcfce7}.err{background:#fee2e2}.warn{background:#fef3c7}.na{background:#f3f4f6}
+    .pill{display:inline-block;padding:3px 8px;border-radius:12px;font-size:11px;font-weight:600;margin-right:5px;color:#fff}
+    .summary{background:#f6f8fa;padding:14px;border-left:5px solid #F05A28;border-radius:6px;margin:14px 0}
+    .photo-grid{display:flex;flex-wrap:wrap;gap:6px;margin-top:6px}
+    .photo-grid img{max-width:200px;max-height:200px;border:1px solid #d2cec8;border-radius:4px}
+    .disclaimer{margin-top:30px;padding:14px;background:#fff3e0;border-left:4px solid #F05A28;font-size:11px;border-radius:4px}
+    .header-block{background:#0D1B2A;color:#fff;padding:20px;border-radius:6px;margin-bottom:20px;display:flex;align-items:center;gap:18px;flex-wrap:wrap}
+    .header-block img{max-height:80px;max-width:180px;background:#fff;padding:6px;border-radius:4px}
+    @media print{body{margin:10px}}
+  </style></head><body>
+  <div class="header-block">
+    ${logo ? `<img src="${logo}">` : ''}
+    <div style="flex:1;min-width:200px">
+      <div style="color:#F05A28;font-weight:bold;font-size:13px;letter-spacing:2px;text-transform:uppercase">${esc(settings.company || 'Homi Building Consultants')}</div>
+      <h1 style="border-bottom:4px solid #F05A28;padding-bottom:6px;margin:8px 0;font-size:22px">${esc(insp.name)} ${includeInternal ? '<span style="font-size:13px;background:#F05A28;padding:2px 8px;border-radius:10px;vertical-align:middle">INTERNAL</span>' : ''}</h1>
+      <div style="font-size:13px;opacity:.9">
+        <strong>Property:</strong> ${esc(c.address || '')}<br>
+        <strong>Client:</strong> ${esc(c.name || '')}<br>
+        <strong>Date:</strong> ${new Date().toLocaleDateString('en-AU', { day: 'numeric', month: 'long', year: 'numeric' })}<br>
+        <strong>Standard:</strong> ${esc(insp.standard || '')}<br>
+        ${settings.vba ? `<strong>Inspector registration:</strong> ${esc(settings.vba)}` : ''}
+      </div>
+    </div>
+  </div>
+
+  <div class="summary">
+    <strong>Executive summary</strong><br>
+    <span class="pill" style="background:#16a34a">${totC} Compliant</span>
+    <span class="pill" style="background:#dc2626">${totF} Defects</span>
+    <span class="pill" style="background:#d97706">${totM} Maintenance</span>
+    <span class="pill" style="background:#64748b">${totNA} N/A</span>
+    <span class="pill" style="background:#2563eb">${totP} photos</span>
+    ${includeInternal && totCost ? `<br><br><strong>Estimated total rectification: AUD $${totCost.toLocaleString()}</strong> <span style="font-size:11px;opacity:.7">(indicative budget only — not a quotation)</span>` : ''}
+  </div>
+
+  <h2>Scope of Inspection</h2>
+  <p>${esc(insp.scope || '')}</p>
+
+  <h2>Schedule of Findings</h2>
+  <table>
+    <thead><tr>
+      <th style="width:35%">Item</th>
+      <th style="width:8%">Status</th>
+      <th style="width:10%">Severity</th>
+      ${includeInternal ? '<th style="width:10%">Cost</th>' : ''}
+      ${includeInternal ? '<th style="width:12%">Assigned to</th>' : ''}
+      <th>Observation / Photos</th>
+    </tr></thead>
+    <tbody>`;
+
+  function renderItems(arr, prefix) {
+    if (!arr) return '';
+    arr.forEach((it, i) => {
+      const v = checks[`${prefix}_${i}`] || {};
+      if (!v.status) return;
+      /* Client report: skip Compliant and N/A items (only show issues) */
+      if (!includeInternal && (v.status === 'Compliant' || v.status === 'Pass' || v.status === 'N/A' || v.status === 'NA')) return;
+      const cls = v.status === 'Pass' || v.status === 'Compliant' ? 'ok' : v.status === 'Fail' || v.status === 'Defect' ? 'err' : v.status === 'Maintenance' ? 'warn' : v.status === 'N/A' ? 'na' : '';
+      let photos = '';
+      if (v.photos && v.photos.length) {
+        photos = `<div class="photo-grid">${v.photos.map(p => `<img src="${p.data}">`).join('')}</div>`;
+      }
+      body += `<tr class="${cls}">
+        <td>${esc(it)}</td>
+        <td><strong>${esc(v.status)}</strong></td>
+        <td>${esc(v.severity || '')}</td>
+        ${includeInternal ? `<td>${v.cost ? '$' + parseFloat(v.cost).toLocaleString() : ''}</td>` : ''}
+        ${includeInternal ? `<td>${esc(v.assignee || '')}</td>` : ''}
+        <td>${esc(v.notes || '')}${photos}</td>
+      </tr>`;
+    });
+  }
+  
+  if (insp.items) renderItems(insp.items, 'item');
+  if (insp.stages) {
+    insp.stages.forEach((s, si) => renderItems(s.chk, `stage_${si}`));
+  }
+  if (insp.standards14) renderItems(insp.standards14, 'rms');
+  
+  body += `</tbody></table>
+
+  <div class="disclaimer">
+    <strong>Professional disclaimer:</strong> This report has been prepared by ${esc(settings.company || 'Homi Building Consultants')} based on visual, non-invasive inspection of accessible areas on the date stated. The report addresses the specific scope defined above. ${includeInternal ? 'Cost estimates are indicative for budgeting purposes only and do not constitute a quotation.' : ''} Reliance by parties other than the named client requires written consent. This report does not constitute legal advice or a guarantee of compliance with all applicable laws. Refer to the relevant Australian Standard for the inspection type.
+  </div>
+  <p style="margin-top:24px;font-size:11px;color:#64748b">Report ID: ${id.toUpperCase()}-${Date.now().toString(36).toUpperCase()} · Generated: ${new Date().toLocaleString('en-AU')}</p>
+  </body></html>`;
+
+  const blob = new Blob([body], { type: 'text/html' });
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = `${includeInternal ? 'INTERNAL_' : ''}${insp.name.replace(/[^\w]+/g, '_')}_${(c.name || 'project').replace(/\W/g, '_')}.html`;
+  a.click();
+  showToast(`✓ ${includeInternal ? 'Internal' : 'Client'} report exported`, 'ok');
+}
+
+/* ---------- SETUP TAB ---------- */
+function renderMobileSetup() {
+  const settings = PROJECT.settings || {};
+  const ai = settings.ai || {};
+  const logo = settings.logoDataURL;
+  const isSignedIn = (typeof driveAccessToken !== 'undefined' && driveAccessToken) || localStorage.getItem('hbc_gdrive_signed_in') === '1';
+  
+  let h = `<h2 style="color:#0D1B2A;font-family:'Barlow Condensed';text-transform:uppercase;letter-spacing:1px;margin:8px 0 14px">Setup</h2>`;
+  
+  /* Logo card */
+  h += `<div class="mb-section"><div style="padding:14px">
+    <div class="mb-item-cat">Company branding</div>
+    <div class="mb-item-title">${esc(settings.company || 'Homi Building Consultants')}</div>
+    ${logo ? `<img src="${logo}" style="max-height:80px;max-width:200px;background:#fff;padding:6px;border:1px solid #d2cec8;border-radius:6px;margin-top:8px">` : ''}
+    <div class="mb-detail-actions" style="margin-top:10px">
+      <button class="mb-detail-btn" onclick="document.getElementById('mb_logo_upload').click()">${logo ? 'Replace' : 'Upload'} logo</button>
+      <button class="mb-detail-btn primary" onclick="mbEditCompany()">✏ Edit details</button>
+    </div>
+    <input type="file" id="mb_logo_upload" accept="image/*" style="display:none" onchange="uploadLogo(event)">
+  </div></div>`;
+  
+  /* Google Drive */
+  h += `<div class="mb-section"><div style="padding:14px">
+    <div class="mb-item-cat">Cloud backup</div>
+    <div class="mb-item-title">Google Drive ${isSignedIn ? '<span style="color:#16a34a;font-size:14px">✅ Connected</span>' : ''}</div>
+    <div class="mb-detail-actions" style="margin-top:10px">
+      ${isSignedIn ? `
+        <button class="mb-detail-btn primary" onclick="driveSaveProject()">☁ Backup now</button>
+        <button class="mb-detail-btn" onclick="driveSignOut()">Sign out</button>
+      ` : `
+        <button class="mb-detail-btn primary" style="grid-column:span 2" onclick="driveSignIn()">🔐 Sign in with Google</button>
+      `}
+    </div>
+  </div></div>`;
+  
+  /* AI Keys */
+  const aiProviders = [
+    { id: 'google', name: 'Gemini', key: ai.google && ai.google.key },
+    { id: 'claude', name: 'Claude', key: ai.claude && ai.claude.key },
+    { id: 'chatgpt', name: 'ChatGPT', key: ai.chatgpt && ai.chatgpt.key }
+  ];
+  h += `<div class="mb-section"><div style="padding:14px">
+    <div class="mb-item-cat">AI providers</div>
+    <div style="margin-top:8px">`;
+  aiProviders.forEach(p => {
+    h += `<div style="display:flex;justify-content:space-between;align-items:center;padding:8px 0;border-bottom:1px solid #e5e7eb">
+      <span style="font-weight:600">${esc(p.name)}</span>
+      <span style="color:${p.key ? '#16a34a' : '#dc2626'};font-weight:bold;font-size:12px">${p.key ? '✓ Saved' : '✗ Not set'}</span>
+    </div>`;
+  });
+  h += `</div>
+    <button class="mb-detail-btn" style="width:100%;margin-top:10px" onclick="mbDesktopAlert('Edit API keys in desktop view')">Edit on desktop</button>
+  </div></div>`;
+  
+  /* Maintenance */
+  h += `<div class="mb-section"><div style="padding:14px">
+    <div class="mb-item-cat">Maintenance</div>
+    <div class="mb-detail-actions" style="margin-top:10px">
+      <button class="mb-detail-btn" onclick="clearAppCache()">🗑 Clear cache</button>
+      <button class="mb-detail-btn" style="background:#fee2e2;color:#991b1b" onclick="clearLocalData()">⚠ Delete data</button>
+    </div>
+  </div></div>`;
+  
+  /* Libraries */
+  h += `<div class="mb-section"><div style="padding:14px">
+    <div class="mb-item-cat">Libraries</div>
+    <div style="margin-top:8px">
+      <button class="mb-detail-btn" style="width:100%;margin-bottom:6px" onclick="openDefectLibraryManager()">🛠 Defects Library (${DEFECT_LIBRARY.reduce((s,c)=>s+c.issues.length,0)})</button>
+      <button class="mb-detail-btn" style="width:100%" onclick="openTemplateManager()">🛠 Templates (${INSPECTION_TYPES.length})</button>
+    </div>
+  </div></div>`;
+
+  return h;
+}
+
+window.mbDesktopAlert = function(msg) {
+  showToast(msg, 'warn');
+};
+
+window.mbEditCompany = function() {
+  const s = PROJECT.settings || {};
+  mbBottomSheet('Edit Company Details', `
+    <span class="mb-detail-label">Company name</span>
+    <input type="text" class="mb-detail-input" id="mb_co_name" value="${esc(s.company || '')}">
+    <span class="mb-detail-label">Contact name</span>
+    <input type="text" class="mb-detail-input" id="mb_co_contact" value="${esc(s.contactName || '')}">
+    <span class="mb-detail-label">ABN</span>
+    <input type="text" class="mb-detail-input" id="mb_co_abn" value="${esc(s.abn || '')}">
+    <span class="mb-detail-label">VBA registration</span>
+    <input type="text" class="mb-detail-input" id="mb_co_vba" value="${esc(s.vba || '')}">
+    <span class="mb-detail-label">Email</span>
+    <input type="email" class="mb-detail-input" id="mb_co_email" value="${esc(s.email || '')}">
+    <span class="mb-detail-label">Phone</span>
+    <input type="tel" class="mb-detail-input" id="mb_co_phone" value="${esc(s.phone || '')}">
+    <div class="mb-detail-actions" style="margin-top:14px">
+      <button class="mb-detail-btn" onclick="mbCloseSheet()">Cancel</button>
+      <button class="mb-detail-btn primary" onclick="mbSaveCompany()">✓ Save</button>
+    </div>
+  `);
+};
+
+window.mbSaveCompany = function() {
+  PROJECT.settings = PROJECT.settings || {};
+  PROJECT.settings.company = document.getElementById('mb_co_name').value;
+  PROJECT.settings.contactName = document.getElementById('mb_co_contact').value;
+  PROJECT.settings.abn = document.getElementById('mb_co_abn').value;
+  PROJECT.settings.vba = document.getElementById('mb_co_vba').value;
+  PROJECT.settings.email = document.getElementById('mb_co_email').value;
+  PROJECT.settings.phone = document.getElementById('mb_co_phone').value;
+  if (typeof saveProject === 'function') saveProject(true);
+  mbCloseSheet();
+  showToast('✓ Company details saved', 'ok');
+  renderMobilePage();
+};
+
+/* ---------- HOOK INTO MAIN RENDER ---------- */
+const __origRenderPagesMobile = renderPages;
+renderPages = function() {
+  if (isMobileView()) {
+    enableMobileMode();
+    renderMobilePage();
+  } else {
+    document.body.classList.remove('mobile-mode');
+    __origRenderPagesMobile();
+  }
+};
+
+/* Initial render */
+setTimeout(() => {
+  enableMobileMode();
+  renderPages();
+}, 100);
+
+
 </script>
 </body>
 </html>
