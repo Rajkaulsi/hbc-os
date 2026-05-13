@@ -13962,6 +13962,463 @@ window.toggleFullAssessment = function() {
 console.log('[Phase D] Desktop bug fixes loaded: tab persistence, real AI Mentor, file upload, full assessment, Siting compliance');
 
 
+
+/* ============================================================
+   PHASE E — MOBILE UI HARDENING & SECTION CARDS
+   1. Hide ALL desktop chrome on mobile (header, toolbar, etc.)
+   2. Section-card landing screen (like proper inspection apps)
+   3. Edit mode — add custom sections AND custom items
+   ============================================================ */
+
+/* ---------- 1. HIDE DESKTOP CHROME ON MOBILE — HARD RESET ---------- */
+(function killDesktopChromeOnMobile() {
+  const style = document.createElement('style');
+  style.id = 'mb-hide-chrome';
+  style.textContent = `
+    @media (max-width: 768px) {
+      body.mobile-mode > header.hdr,
+      body.mobile-mode > nav.tabs,
+      body.mobile-mode > .toolbar,
+      body.mobile-mode > .stagebar,
+      body.mobile-mode header.hdr,
+      body.mobile-mode nav.tabs,
+      body.mobile-mode .toolbar,
+      body.mobile-mode .stagebar,
+      body.mobile-mode .hdr-top,
+      body.mobile-mode .hdr-fields,
+      body.mobile-mode #syncStatus,
+      body.mobile-mode .progress-container,
+      body.mobile-mode .pbar {
+        display: none !important;
+        visibility: hidden !important;
+        height: 0 !important;
+        overflow: hidden !important;
+      }
+      body.mobile-mode #pages {
+        margin: 0 !important;
+        padding: 0 !important;
+      }
+      body.mobile-mode #pages .page {
+        padding: 0 !important;
+        margin: 0 !important;
+      }
+      /* The desktop page sections that get rendered into #pages should be hidden when in mobile-mode */
+      body.mobile-mode #pages > section.page {
+        display: none !important;
+      }
+    }
+  `;
+  document.head.appendChild(style);
+})();
+
+/* ---------- 2. SECTION-CARD LANDING (PROPER INSPECTION APP UX) ---------- */
+/* Re-render Inspect tab as: section list first, drill into one section at a time */
+
+MOBILE_STATE.activeSection = null; // null = section list view, else string = section name
+
+window.mbBackToSections = function() {
+  haptic(8);
+  MOBILE_STATE.activeSection = null;
+  MOBILE_STATE.expandedItem = null;
+  renderMobilePage();
+};
+
+/* Build the section list for the current inspection type */
+function mbBuildSectionList() {
+  const cur = PROJECT.inspections.currentType;
+  const insp = INSPECTION_TYPES.find(t => t.id === cur);
+  if (!insp) return [];
+  const checks = PROJECT.inspections[cur] || {};
+  
+  /* Pull items from template */
+  const items = [];
+  if (insp.items) {
+    insp.items.forEach((label, i) => {
+      const section = (insp._sections && insp._sections[i]) || 'Inspection items';
+      items.push({ label, key: 'item_' + i, section, customItem: false });
+    });
+  }
+  if (insp.stages) {
+    insp.stages.forEach((s, si) => {
+      s.chk.forEach((c, ci) => items.push({ label: c, key: 'stage_' + si + '_' + ci, section: s.n, customItem: false }));
+    });
+  }
+  if (insp.standards14) {
+    insp.standards14.forEach((it, i) => {
+      items.push({ label: it, key: 'rms_' + i, section: '14 Prescribed Standards', customItem: false });
+    });
+  }
+  
+  /* Append custom items for this job (per-section) */
+  const customItems = (PROJECT.customInspectionItems && PROJECT.customInspectionItems[cur]) || [];
+  customItems.forEach((ci, i) => {
+    items.push({ label: ci.label, key: 'custom_' + i, section: ci.section, customItem: true, customIdx: i });
+  });
+  
+  /* Group by section */
+  const sectionMap = {};
+  items.forEach(it => {
+    if (!sectionMap[it.section]) sectionMap[it.section] = [];
+    sectionMap[it.section].push(it);
+  });
+  
+  /* Append custom sections for this job */
+  const customSections = (PROJECT.customSections && PROJECT.customSections[cur]) || [];
+  customSections.forEach(s => {
+    if (!sectionMap[s]) sectionMap[s] = [];
+  });
+  
+  /* Compute completion per section */
+  const sections = Object.keys(sectionMap).map(name => {
+    const secItems = sectionMap[name];
+    let completed = 0, failed = 0, maint = 0;
+    secItems.forEach(it => {
+      const v = checks[it.key];
+      if (v && v.status) {
+        completed++;
+        if (v.status === 'Fail' || v.status === 'Defect') failed++;
+        else if (v.status === 'Maintenance') maint++;
+      }
+    });
+    return {
+      name,
+      items: secItems,
+      total: secItems.length,
+      completed,
+      failed,
+      maint,
+      complete: secItems.length > 0 && completed === secItems.length,
+      isCustom: customSections.indexOf(name) > -1
+    };
+  });
+  
+  return sections;
+}
+
+window.renderMobileSectionList = function() {
+  ensureLocations();
+  const cur = PROJECT.inspections.currentType;
+  const insp = INSPECTION_TYPES.find(t => t.id === cur);
+  if (!insp) return '<p style="padding:20px">No active inspection.</p>';
+  
+  const sections = mbBuildSectionList();
+  const editMode = MOBILE_STATE.editSections;
+  
+  /* Header — Report ID + Settings + Edit */
+  const job = PROJECT;
+  const reportId = (PROJECT.id || 'NEW').replace('JOB_', '');
+  
+  let html = '<div style="display:flex;align-items:center;gap:8px;padding:0 0 12px;border-bottom:1px solid #e5e7eb;margin-bottom:14px">' +
+    '<button class="mb-iconbtn" style="background:#fff;color:#0D1B2A;border:1.5px solid #e5e7eb" onclick="mbSwitchTab(\'home\')" aria-label="Back to jobs">←</button>' +
+    '<div style="flex:1">' +
+      '<div style="font-size:10px;text-transform:uppercase;letter-spacing:1px;color:#64748b;font-weight:700">Report ID</div>' +
+      '<div style="font-size:13px;font-weight:600;color:#0D1B2A;font-family:monospace">' + esc(reportId) + '</div>' +
+    '</div>' +
+    '<button class="mb-iconbtn" style="background:#F05A28;color:#fff" onclick="mbOpenSettingsMenu()" aria-label="Settings">⚙</button>' +
+    '<button class="mb-detail-btn ' + (editMode ? 'primary' : '') + '" style="padding:8px 14px;font-size:12px;background:' + (editMode ? '#16a34a' : '#F05A28') + ';color:#fff" onclick="mbToggleEditSections()">' + (editMode ? '✓ Done' : 'Edit') + '</button>' +
+  '</div>';
+  
+  /* Inspection type name */
+  html += '<h2 style="font-family:\'Barlow Condensed\',sans-serif;text-transform:uppercase;letter-spacing:1px;margin:0 0 4px;font-size:18px;color:#0D1B2A">' + esc(insp.name) + '</h2>';
+  html += '<p class="mini muted" style="font-size:11px;color:#64748b;margin:0 0 14px">' + esc(insp.standard || '') + '</p>';
+  
+  /* Comprehensive toggle if applicable */
+  if (insp._stdMarks) {
+    const stdCount = insp._stdMarks.filter(m => m === 'std').length;
+    const totalCount = insp._stdMarks.length;
+    html += '<div style="background:#fff;border-radius:10px;padding:10px 12px;margin-bottom:14px;display:flex;align-items:center;gap:10px;box-shadow:0 1px 3px rgba(0,0,0,.05)">' +
+      '<div style="flex:1">' +
+        '<div style="font-size:10px;text-transform:uppercase;letter-spacing:1px;color:#64748b;font-weight:700">Depth</div>' +
+        '<div style="font-size:13px;font-weight:600;color:#0D1B2A;margin-top:2px">' + (insp._comprehensive ? 'Comprehensive (' + totalCount + ' items)' : 'Standard (' + stdCount + ' items)') + '</div>' +
+      '</div>' +
+      '<button class="mb-detail-btn primary" style="padding:8px 14px;font-size:12px" onclick="mbToggleComprehensive()">' +
+        (insp._comprehensive ? 'Standard →' : 'Comprehensive →') + '</button>' +
+    '</div>';
+  }
+  
+  /* Section legend */
+  html += '<div style="display:flex;gap:14px;font-size:12px;color:#475569;font-weight:600;padding:10px 0;margin-bottom:8px">' +
+    '<span style="display:flex;align-items:center;gap:6px"><span style="width:10px;height:10px;border-radius:50%;background:#16a34a;display:inline-block"></span>Completed Section</span>' +
+    '<span style="display:flex;align-items:center;gap:6px"><span style="width:10px;height:10px;border-radius:50%;background:#F05A28;display:inline-block"></span>Incomplete Section</span>' +
+  '</div>';
+  
+  /* Section cards */
+  if (!sections.length) {
+    html += '<div style="text-align:center;padding:40px 20px;color:#94a3b8;background:#fff;border-radius:12px"><div style="font-size:48px;margin-bottom:14px">📋</div><p>No sections yet. Tap "Edit" → "Add custom section".</p></div>';
+  } else {
+    sections.forEach((sec, idx) => {
+      const dotColor = sec.complete ? '#16a34a' : '#F05A28';
+      html += '<div style="background:#fff;border-radius:10px;padding:14px 16px;margin-bottom:8px;box-shadow:0 1px 3px rgba(0,0,0,.05);display:flex;align-items:center;gap:12px;cursor:pointer" ' +
+        (editMode ? '' : 'onclick="mbOpenSection(\'' + sec.name.replace(/'/g, "\\'") + '\')"') + '>' +
+        '<span style="width:12px;height:12px;border-radius:50%;background:' + dotColor + ';display:inline-block;flex-shrink:0"></span>' +
+        '<div style="flex:1;min-width:0">' +
+          '<div style="font-size:13px;font-weight:700;color:#0D1B2A;text-transform:uppercase;letter-spacing:1px;line-height:1.3">' + esc(sec.name) + '</div>' +
+          '<div style="font-size:11px;color:#64748b;margin-top:2px">' + sec.completed + '/' + sec.total + ' items' +
+            (sec.failed ? ' · <span style="color:#dc2626;font-weight:700">' + sec.failed + ' failed</span>' : '') +
+            (sec.maint ? ' · <span style="color:#d97706;font-weight:700">' + sec.maint + ' maint</span>' : '') +
+          '</div>' +
+        '</div>';
+      
+      if (editMode) {
+        if (sec.isCustom) {
+          html += '<button class="mb-detail-btn" style="background:#fee2e2;color:#991b1b;padding:6px 10px;font-size:11px" onclick="event.stopPropagation();mbDeleteCustomSection(\'' + sec.name.replace(/'/g, "\\'") + '\')">✕</button>';
+        } else {
+          html += '<span style="font-size:10px;color:#94a3b8">(built-in)</span>';
+        }
+      } else {
+        html += '<span style="color:#F05A28;font-size:18px;font-weight:700">›</span>';
+      }
+      
+      html += '</div>';
+    });
+    
+    if (editMode) {
+      html += '<button class="mb-detail-btn primary" style="width:100%;padding:14px;margin-top:14px" onclick="mbAddCustomSection()">➕ Add Custom Section</button>';
+    }
+  }
+  
+  return html;
+};
+
+window.mbOpenSection = function(sectionName) {
+  haptic(8);
+  MOBILE_STATE.activeSection = sectionName;
+  MOBILE_STATE.expandedItem = null;
+  renderMobilePage();
+  window.scrollTo({ top: 0, behavior: 'auto' });
+};
+
+window.mbToggleEditSections = function() {
+  haptic(8);
+  MOBILE_STATE.editSections = !MOBILE_STATE.editSections;
+  renderMobilePage();
+};
+
+window.mbAddCustomSection = function() {
+  const name = prompt('Section name (e.g. "Pool & Spa", "Granny Flat", "Outbuilding"):');
+  if (!name || !name.trim()) return;
+  const cur = PROJECT.inspections.currentType;
+  PROJECT.customSections = PROJECT.customSections || {};
+  PROJECT.customSections[cur] = PROJECT.customSections[cur] || [];
+  if (PROJECT.customSections[cur].indexOf(name.trim()) === -1) {
+    PROJECT.customSections[cur].push(name.trim());
+  }
+  if (typeof saveProject === 'function') saveProject(true);
+  haptic([10, 30, 10]);
+  showToast('✓ Section added: ' + name.trim(), 'ok');
+  renderMobilePage();
+};
+
+window.mbDeleteCustomSection = function(name) {
+  if (!confirm('Remove section "' + name + '"? Any custom items in it will also be removed.')) return;
+  const cur = PROJECT.inspections.currentType;
+  if (PROJECT.customSections && PROJECT.customSections[cur]) {
+    PROJECT.customSections[cur] = PROJECT.customSections[cur].filter(s => s !== name);
+  }
+  if (PROJECT.customInspectionItems && PROJECT.customInspectionItems[cur]) {
+    PROJECT.customInspectionItems[cur] = PROJECT.customInspectionItems[cur].filter(it => it.section !== name);
+  }
+  if (typeof saveProject === 'function') saveProject(true);
+  haptic(8);
+  renderMobilePage();
+};
+
+window.mbOpenSettingsMenu = function() {
+  haptic(8);
+  mbBottomSheet('Settings',
+    '<button class="mb-detail-btn primary" style="width:100%;margin-bottom:6px;padding:14px" onclick="mbCloseSheet();mbSwitchTab(\'setup\')">⚙ Open Setup tab</button>' +
+    '<button class="mb-detail-btn" style="width:100%;margin-bottom:6px;padding:14px" onclick="mbCloseSheet();saveProject()">💾 Save now</button>' +
+    '<button class="mb-detail-btn" style="width:100%;padding:14px" onclick="mbCloseSheet();mbEditClient()">✏ Edit job details</button>'
+  );
+};
+
+/* ---------- 3. SECTION DETAIL VIEW (showing items within a section) ---------- */
+window.renderMobileSectionDetail = function() {
+  const cur = PROJECT.inspections.currentType;
+  const insp = INSPECTION_TYPES.find(t => t.id === cur);
+  if (!insp || !MOBILE_STATE.activeSection) return renderMobileSectionList();
+  
+  const sectionName = MOBILE_STATE.activeSection;
+  const checks = PROJECT.inspections[cur] = PROJECT.inspections[cur] || {};
+  
+  /* Find items in this section */
+  const items = [];
+  if (insp.items) {
+    insp.items.forEach((label, i) => {
+      const sec = (insp._sections && insp._sections[i]) || 'Inspection items';
+      if (sec === sectionName) {
+        items.push({ label, key: 'item_' + i, section: sec, customItem: false });
+      }
+    });
+  }
+  if (insp.stages) {
+    insp.stages.forEach((s, si) => {
+      if (s.n === sectionName) {
+        s.chk.forEach((c, ci) => items.push({ label: c, key: 'stage_' + si + '_' + ci, section: s.n, customItem: false }));
+      }
+    });
+  }
+  if (insp.standards14 && sectionName === '14 Prescribed Standards') {
+    insp.standards14.forEach((it, i) => items.push({ label: it, key: 'rms_' + i, section: sectionName, customItem: false }));
+  }
+  /* Custom items in this section */
+  const customItems = (PROJECT.customInspectionItems && PROJECT.customInspectionItems[cur]) || [];
+  customItems.forEach((ci, i) => {
+    if (ci.section === sectionName) {
+      items.push({ label: ci.label, key: 'custom_' + i, section: ci.section, customItem: true, customIdx: i });
+    }
+  });
+  
+  /* Header: back arrow + section name + add item */
+  let html = '<div style="display:flex;align-items:center;gap:8px;padding:0 0 14px;margin-bottom:10px;border-bottom:1px solid #e5e7eb">' +
+    '<button class="mb-iconbtn" style="background:#fff;color:#0D1B2A;border:1.5px solid #e5e7eb" onclick="mbBackToSections()" aria-label="Back">←</button>' +
+    '<div style="flex:1;min-width:0">' +
+      '<div style="font-size:10px;text-transform:uppercase;letter-spacing:1px;color:#64748b;font-weight:700">Section</div>' +
+      '<div style="font-size:14px;font-weight:700;color:#0D1B2A;text-transform:uppercase;letter-spacing:1px;line-height:1.3">' + esc(sectionName) + '</div>' +
+    '</div>' +
+    '<button class="mb-detail-btn primary" style="padding:8px 12px;font-size:12px" onclick="mbAddCustomItem(\'' + sectionName.replace(/'/g, "\\'") + '\')">+ Item</button>' +
+  '</div>';
+  
+  /* Location selector */
+  html += mbRenderLocationSelector();
+  
+  /* Quick filter */
+  html += '<div class="mb-filter-chips" style="margin-bottom:10px">' +
+    '<button class="' + (MOBILE_STATE.filterStatus === 'all' ? 'active' : '') + '" onclick="mbFilterItems(\'all\')">All</button>' +
+    '<button class="' + (MOBILE_STATE.filterStatus === 'pending' ? 'active' : '') + '" onclick="mbFilterItems(\'pending\')">Pending</button>' +
+    '<button class="' + (MOBILE_STATE.filterStatus === 'failed' ? 'active' : '') + '" onclick="mbFilterItems(\'failed\')">Failed</button>' +
+    '<button class="' + (MOBILE_STATE.filterStatus === 'maintenance' ? 'active' : '') + '" onclick="mbFilterItems(\'maintenance\')">Maint</button>' +
+    '<button class="' + (MOBILE_STATE.filterStatus === 'pass' ? 'active' : '') + '" onclick="mbFilterItems(\'pass\')">Pass</button>' +
+  '</div>';
+  
+  /* Filter items */
+  const q = (MOBILE_STATE.searchQuery || '').toLowerCase();
+  const filtered = items.filter(item => {
+    if (q && !item.label.toLowerCase().includes(q)) return false;
+    const v = checks[item.key] || {};
+    const s = v.status;
+    if (MOBILE_STATE.filterStatus === 'pending') return !s;
+    if (MOBILE_STATE.filterStatus === 'failed') return s === 'Fail' || s === 'Defect';
+    if (MOBILE_STATE.filterStatus === 'maintenance') return s === 'Maintenance' || s === 'RFI';
+    if (MOBILE_STATE.filterStatus === 'pass') return s === 'Pass' || s === 'Compliant';
+    return true;
+  });
+  
+  if (!filtered.length) {
+    html += '<div style="text-align:center;padding:40px 20px;color:#94a3b8;background:#fff;border-radius:12px">';
+    html += items.length ? '<p>No items match the current filter.</p>' : '<p>This section has no items yet.<br>Tap "+ Item" to add custom inspection items.</p>';
+    html += '</div>';
+  } else {
+    /* Render item cards */
+    filtered.forEach(item => {
+      if (typeof renderMobileItemCard === 'function') {
+        html += renderMobileItemCard(item, checks);
+      }
+    });
+  }
+  
+  return html;
+};
+
+window.mbAddCustomItem = function(sectionName) {
+  const label = prompt('Custom item label (what should be inspected):');
+  if (!label || !label.trim()) return;
+  const cur = PROJECT.inspections.currentType;
+  PROJECT.customInspectionItems = PROJECT.customInspectionItems || {};
+  PROJECT.customInspectionItems[cur] = PROJECT.customInspectionItems[cur] || [];
+  PROJECT.customInspectionItems[cur].push({
+    label: label.trim(),
+    section: sectionName,
+    addedAt: new Date().toISOString()
+  });
+  if (typeof saveProject === 'function') saveProject(true);
+  haptic([10, 30, 10]);
+  showToast('✓ Custom item added', 'ok');
+  renderMobilePage();
+};
+
+/* ---------- 4. HOOK INTO renderMobilePage ---------- */
+(function injectSectionRouting() {
+  if (typeof renderMobilePage !== 'function') return;
+  const orig = window.renderMobilePage;
+  
+  window.renderMobilePage = function() {
+    if (!document.body.classList.contains('mobile-mode')) {
+      return orig.apply(this, arguments);
+    }
+    
+    /* Hide desktop pages immediately when in mobile mode */
+    const pagesDiv = document.getElementById('pages');
+    if (pagesDiv) {
+      /* Clear any leftover desktop page sections */
+      const pageSections = pagesDiv.querySelectorAll('section.page');
+      pageSections.forEach(s => { s.style.display = 'none'; });
+    }
+    
+    /* If on Inspect tab AND there's an active job, use section routing */
+    if (MOBILE_STATE.activeTab === 'inspect' && getActiveJobId && getActiveJobId()) {
+      let html = renderMobileTopBar();
+      html += '<div class="mb-content">';
+      
+      if (MOBILE_STATE.activeSection) {
+        /* Showing within a section */
+        html += renderMobileSectionDetail();
+      } else {
+        /* Showing section list */
+        html += renderMobileSectionList();
+      }
+      
+      html += '</div>';
+      html += renderMobileTabBar();
+      
+      if (pagesDiv) pagesDiv.innerHTML = html;
+      return;
+    }
+    
+    /* Default: use original */
+    orig.apply(this, arguments);
+  };
+})();
+
+/* When changing inspection type or switching tabs, reset section state */
+(function trackTypeSwitches() {
+  const origSwitch = window.mbSwitchTab;
+  if (typeof origSwitch === 'function') {
+    window.mbSwitchTab = function(tab) {
+      MOBILE_STATE.activeSection = null;
+      MOBILE_STATE.editSections = false;
+      return origSwitch.apply(this, arguments);
+    };
+  }
+  const origSelect = window.mbSelectInspection;
+  if (typeof origSelect === 'function') {
+    window.mbSelectInspection = function(id) {
+      MOBILE_STATE.activeSection = null;
+      MOBILE_STATE.editSections = false;
+      return origSelect.apply(this, arguments);
+    };
+  }
+})();
+
+/* ---------- 5. RUN HIDE-CHROME ON EVERY RENDER (defensive) ---------- */
+(function continuouslyHideDesktop() {
+  setInterval(() => {
+    if (document.body.classList.contains('mobile-mode')) {
+      const hdr = document.querySelector('header.hdr');
+      if (hdr) hdr.style.display = 'none';
+      const tabs = document.getElementById('tabs');
+      if (tabs) tabs.style.display = 'none';
+      const toolbar = document.querySelector('.toolbar');
+      if (toolbar) toolbar.style.display = 'none';
+      const stagebar = document.getElementById('stagebar');
+      if (stagebar) stagebar.style.display = 'none';
+    }
+  }, 500);
+})();
+
+console.log('[Phase E] Mobile UI hardening loaded — sections, custom items, chrome removal');
+
+
 </script>
 </body>
 </html>
