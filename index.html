@@ -11078,6 +11078,2285 @@ window.mbDeleteFreeForm = function(idx) {
 console.log('[Phase 2 Final] Locations + AI defect generation loaded');
 
 
+
+/* ============================================================
+   PHASE A — FOUNDATION (V23)
+   • Job model: each property = isolated job, no cross-contamination
+   • Bulletproof save: IDB + LS parallel, save on every change/blur/background
+   • Navigation preservation: state survives tab switches
+   • iOS stability: viewport lock, scroll stability, no zoom glitches
+   ============================================================ */
+
+/* ---------- 1. JOBS STORAGE MODEL ---------- */
+const JOBS_IDB_STORE = 'jobs';
+const JOBS_LS_KEY = 'HBC_OS_JOBS_INDEX';
+const ACTIVE_JOB_KEY = 'HBC_OS_ACTIVE_JOB';
+
+/* Open/upgrade DB to add jobs store */
+function jobsIdbOpen() {
+  return new Promise((resolve, reject) => {
+    const req = indexedDB.open(IDB_NAME, 2);
+    req.onerror = () => reject(req.error);
+    req.onsuccess = () => resolve(req.result);
+    req.onupgradeneeded = (e) => {
+      const db = e.target.result;
+      if (!db.objectStoreNames.contains(IDB_STORE)) {
+        db.createObjectStore(IDB_STORE);
+      }
+      if (!db.objectStoreNames.contains(JOBS_IDB_STORE)) {
+        db.createObjectStore(JOBS_IDB_STORE);
+      }
+      if (!db.objectStoreNames.contains('settings')) {
+        db.createObjectStore('settings');
+      }
+    };
+  });
+}
+
+async function jobsIdbSave(jobId, data) {
+  try {
+    const db = await jobsIdbOpen();
+    return new Promise((resolve, reject) => {
+      const tx = db.transaction(JOBS_IDB_STORE, 'readwrite');
+      tx.objectStore(JOBS_IDB_STORE).put(data, jobId);
+      tx.oncomplete = () => { db.close(); resolve(true); };
+      tx.onerror = () => { db.close(); reject(tx.error); };
+    });
+  } catch (e) {
+    console.warn('[Jobs IDB save] failed:', e);
+    return false;
+  }
+}
+
+async function jobsIdbLoad(jobId) {
+  try {
+    const db = await jobsIdbOpen();
+    return new Promise((resolve, reject) => {
+      const tx = db.transaction(JOBS_IDB_STORE, 'readonly');
+      const req = tx.objectStore(JOBS_IDB_STORE).get(jobId);
+      req.onsuccess = () => { db.close(); resolve(req.result); };
+      req.onerror = () => { db.close(); reject(req.error); };
+    });
+  } catch (e) {
+    console.warn('[Jobs IDB load] failed:', e);
+    return null;
+  }
+}
+
+async function jobsIdbDelete(jobId) {
+  try {
+    const db = await jobsIdbOpen();
+    return new Promise((resolve, reject) => {
+      const tx = db.transaction(JOBS_IDB_STORE, 'readwrite');
+      tx.objectStore(JOBS_IDB_STORE).delete(jobId);
+      tx.oncomplete = () => { db.close(); resolve(true); };
+      tx.onerror = () => { db.close(); reject(tx.error); };
+    });
+  } catch (e) {
+    return false;
+  }
+}
+
+/* Jobs index — list of all jobs metadata for the picker */
+function getJobsIndex() {
+  try {
+    const raw = localStorage.getItem(JOBS_LS_KEY);
+    return raw ? JSON.parse(raw) : [];
+  } catch (e) { return []; }
+}
+
+function setJobsIndex(idx) {
+  try {
+    localStorage.setItem(JOBS_LS_KEY, JSON.stringify(idx));
+  } catch (e) { console.warn('[Jobs index] save failed:', e); }
+}
+
+/* Active job pointer */
+function getActiveJobId() {
+  return localStorage.getItem(ACTIVE_JOB_KEY) || null;
+}
+
+function setActiveJobId(jobId) {
+  if (jobId) localStorage.setItem(ACTIVE_JOB_KEY, jobId);
+  else localStorage.removeItem(ACTIVE_JOB_KEY);
+}
+
+/* Create a new job object with empty inspection data */
+function createNewJob(clientName, address, inspectionType) {
+  const id = 'JOB_' + Date.now().toString(36).toUpperCase() + Math.random().toString(36).slice(2, 6).toUpperCase();
+  return {
+    id: id,
+    createdAt: new Date().toISOString(),
+    updatedAt: new Date().toISOString(),
+    status: 'Draft', /* Draft | In Progress | Complete | Sent */
+    client: {
+      name: clientName || '',
+      address: address || '',
+      email: '',
+      phone: '',
+      class: ''
+    },
+    inspectionType: inspectionType || 'PrePurchaseBP',
+    inspections: { currentType: inspectionType || 'PrePurchaseBP' },
+    inspectionHistory: [],
+    customDefects: [],
+    customInspectionTypes: [],
+    agreements: [],
+    locations: {
+      groups: JSON.parse(JSON.stringify(typeof DEFAULT_LOCATIONS !== 'undefined' ? DEFAULT_LOCATIONS : {})),
+      active: 'Lounge / Living',
+      custom: []
+    },
+    freeFormObservations: [],
+    /* Inherits from settings — but each job snapshot keeps its own */
+    settings: PROJECT.settings ? JSON.parse(JSON.stringify(PROJECT.settings)) : {},
+    /* Other V20 fields */
+    adminV18: {},
+    buildingNotices: [],
+    insurance: {},
+    hazMat: [],
+    risks: [],
+    pros: {},
+    docs: {},
+    forms: {}
+  };
+}
+
+/* ---------- 2. BULLETPROOF SAVE ---------- */
+const SAVE_LS_FULL_KEY = 'HBC_OS_PROJECT_FULL';
+let __saveQueue = null;
+let __saveLastHash = '';
+let __saveInProgress = false;
+
+async function reliableSave(silent) {
+  const activeId = getActiveJobId();
+  if (!activeId) {
+    /* No active job — save to legacy single-project IDB key */
+    try {
+      await idbSave(IDB_KEY, JSON.parse(JSON.stringify(PROJECT)));
+      try { localStorage.setItem(SAVE_LS_FULL_KEY, JSON.stringify(PROJECT)); } catch(e){}
+    } catch (e) {
+      try { localStorage.setItem(SAVE_LS_FULL_KEY, JSON.stringify(PROJECT)); } catch(e){}
+    }
+    return true;
+  }
+  
+  __saveInProgress = true;
+  const snapshot = JSON.parse(JSON.stringify(PROJECT));
+  snapshot.updatedAt = new Date().toISOString();
+  
+  let idbOK = false, lsOK = false;
+  
+  /* Save to IDB jobs store */
+  try {
+    idbOK = await jobsIdbSave(activeId, snapshot);
+  } catch (e) {
+    console.warn('[Save] IDB failed:', e);
+  }
+  
+  /* Save to LS as fallback */
+  try {
+    const dataStr = JSON.stringify(snapshot);
+    if (dataStr.length < 4500000) { /* under ~4.5MB to be safe in LS */
+      localStorage.setItem(SAVE_LS_FULL_KEY + '_' + activeId, dataStr);
+      lsOK = true;
+    } else {
+      /* Too large for LS — save just metadata */
+      const meta = {
+        id: snapshot.id,
+        updatedAt: snapshot.updatedAt,
+        client: snapshot.client,
+        tooLargeForLS: true
+      };
+      localStorage.setItem(SAVE_LS_FULL_KEY + '_' + activeId + '_meta', JSON.stringify(meta));
+    }
+  } catch (e) {
+    console.warn('[Save] LS failed:', e);
+  }
+  
+  /* Update jobs index */
+  try {
+    let idx = getJobsIndex();
+    const existing = idx.find(j => j.id === activeId);
+    const meta = {
+      id: activeId,
+      clientName: snapshot.client?.name || '',
+      address: snapshot.client?.address || '',
+      inspectionType: snapshot.inspectionType || snapshot.inspections?.currentType || '',
+      status: snapshot.status || 'In Progress',
+      createdAt: snapshot.createdAt,
+      updatedAt: snapshot.updatedAt,
+      photoCount: countPhotos(snapshot),
+      defectCount: countDefects(snapshot)
+    };
+    if (existing) {
+      Object.assign(existing, meta);
+    } else {
+      idx.unshift(meta);
+    }
+    /* Sort by updatedAt descending */
+    idx.sort((a, b) => (b.updatedAt || '').localeCompare(a.updatedAt || ''));
+    /* Cap at 100 jobs in index */
+    if (idx.length > 100) idx = idx.slice(0, 100);
+    setJobsIndex(idx);
+  } catch (e) {
+    console.warn('[Save] Index update failed:', e);
+  }
+  
+  __saveInProgress = false;
+  __saveLastHash = JSON.stringify(snapshot).length.toString();
+  
+  if (!silent) {
+    if (idbOK || lsOK) {
+      showToast('💾 Saved', 'ok');
+    } else {
+      showToast('⚠ Save failed', 'err');
+    }
+  }
+  return idbOK || lsOK;
+}
+
+function countPhotos(snap) {
+  let n = 0;
+  if (snap.inspections) {
+    Object.keys(snap.inspections).forEach(insp => {
+      if (insp === 'currentType' || insp.startsWith('_')) return;
+      const data = snap.inspections[insp];
+      if (typeof data !== 'object') return;
+      Object.values(data).forEach(item => {
+        if (item && item.photos) n += item.photos.length;
+      });
+    });
+  }
+  if (snap.freeFormObservations) {
+    snap.freeFormObservations.forEach(o => { n += (o.photos || []).length; });
+  }
+  return n;
+}
+
+function countDefects(snap) {
+  let n = 0;
+  if (snap.inspections) {
+    Object.keys(snap.inspections).forEach(insp => {
+      if (insp === 'currentType' || insp.startsWith('_')) return;
+      const data = snap.inspections[insp];
+      if (typeof data !== 'object') return;
+      Object.values(data).forEach(item => {
+        if (item && (item.status === 'Fail' || item.status === 'Defect')) n++;
+      });
+    });
+  }
+  if (snap.freeFormObservations) n += snap.freeFormObservations.length;
+  return n;
+}
+
+/* Debounced save — called on every change, executes after 800ms quiet */
+let __saveDebounceTimer = null;
+function scheduleSave() {
+  if (__saveDebounceTimer) clearTimeout(__saveDebounceTimer);
+  __saveDebounceTimer = setTimeout(() => {
+    reliableSave(true);
+    __saveDebounceTimer = null;
+  }, 800);
+}
+
+/* Replace existing saveProject */
+window.saveProject = async function(silent) {
+  return await reliableSave(silent);
+};
+
+/* Load a specific job into PROJECT */
+async function loadJobIntoProject(jobId) {
+  let data = await jobsIdbLoad(jobId);
+  if (!data) {
+    /* Try LS fallback */
+    try {
+      const ls = localStorage.getItem(SAVE_LS_FULL_KEY + '_' + jobId);
+      if (ls) data = JSON.parse(ls);
+    } catch(e) {}
+  }
+  if (!data) return false;
+  
+  /* Wipe PROJECT and copy in the new job's data */
+  Object.keys(PROJECT).forEach(k => { delete PROJECT[k]; });
+  Object.keys(data).forEach(k => { PROJECT[k] = data[k]; });
+  
+  /* Ensure required structures */
+  if (!PROJECT.inspections) PROJECT.inspections = { currentType: 'PrePurchaseBP' };
+  if (!PROJECT.client) PROJECT.client = {};
+  if (!PROJECT.settings) PROJECT.settings = {};
+  if (!PROJECT.locations) {
+    PROJECT.locations = {
+      groups: JSON.parse(JSON.stringify(DEFAULT_LOCATIONS || {})),
+      active: 'Lounge / Living',
+      custom: []
+    };
+  }
+  if (!PROJECT.freeFormObservations) PROJECT.freeFormObservations = [];
+  if (!PROJECT.customDefects) PROJECT.customDefects = [];
+  if (!PROJECT.customInspectionTypes) PROJECT.customInspectionTypes = [];
+  if (!PROJECT.agreements) PROJECT.agreements = [];
+  
+  if (typeof rebuildLibraries === 'function') rebuildLibraries();
+  setActiveJobId(jobId);
+  return true;
+}
+
+/* Override loadProject — now loads the active job */
+window.loadProject = async function(silent) {
+  const activeId = getActiveJobId();
+  if (!activeId) {
+    if (!silent) showToast('No active job', 'warn');
+    return false;
+  }
+  const ok = await loadJobIntoProject(activeId);
+  if (!silent) {
+    if (ok) showToast('📂 Loaded job', 'ok');
+    else showToast('Load failed', 'err');
+  }
+  if (ok && typeof renderPages === 'function') renderPages();
+  return ok;
+};
+
+/* ---------- 3. SAVE ON EVERY CHANGE / BLUR / BACKGROUND ---------- */
+(function setupAutoSave() {
+  /* Save on every text input change */
+  document.addEventListener('input', (e) => {
+    if (e.target && (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA' || e.target.tagName === 'SELECT')) {
+      scheduleSave();
+    }
+  }, true);
+  
+  /* Save on blur (when user taps away from a field) */
+  document.addEventListener('blur', (e) => {
+    if (e.target && (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA' || e.target.tagName === 'SELECT')) {
+      reliableSave(true);
+    }
+  }, true);
+  
+  /* Save when page is hidden/backgrounded (critical on iOS) */
+  document.addEventListener('visibilitychange', () => {
+    if (document.hidden) {
+      reliableSave(true);
+    }
+  });
+  
+  /* Save on app close */
+  window.addEventListener('pagehide', () => { reliableSave(true); });
+  window.addEventListener('beforeunload', () => { reliableSave(true); });
+  
+  /* Save every 30 seconds as belt-and-braces */
+  setInterval(() => reliableSave(true), 30000);
+})();
+
+/* ---------- 4. NAVIGATION STATE PRESERVATION ---------- */
+/* Save the contents of all text inputs to PROJECT before re-rendering, so they survive */
+const __FIELD_STATE = {};
+
+function preserveFieldStates() {
+  document.querySelectorAll('input, textarea, select').forEach(el => {
+    if (el.id) __FIELD_STATE[el.id] = el.value;
+  });
+}
+
+function restoreFieldStates() {
+  Object.keys(__FIELD_STATE).forEach(id => {
+    const el = document.getElementById(id);
+    if (el && el.value === '' && __FIELD_STATE[id]) {
+      el.value = __FIELD_STATE[id];
+    }
+  });
+}
+
+/* Wrap renderMobilePage to preserve state */
+(function wrapRenderForState() {
+  if (typeof renderMobilePage !== 'function') return;
+  const orig = window.renderMobilePage;
+  window.renderMobilePage = function() {
+    /* Capture current scroll position */
+    const scrollY = window.scrollY;
+    /* Capture field states */
+    preserveFieldStates();
+    /* Capture active element */
+    const activeEl = document.activeElement;
+    const activeId = activeEl && activeEl.id ? activeEl.id : null;
+    const activeSelStart = activeEl && activeEl.selectionStart !== undefined ? activeEl.selectionStart : null;
+    
+    /* Do the render */
+    orig.apply(this, arguments);
+    
+    /* Restore — wait one tick so DOM is built */
+    requestAnimationFrame(() => {
+      restoreFieldStates();
+      /* Re-focus the previously active element if it still exists */
+      if (activeId) {
+        const newEl = document.getElementById(activeId);
+        if (newEl && document.activeElement !== newEl) {
+          newEl.focus();
+          if (activeSelStart !== null && newEl.setSelectionRange) {
+            try { newEl.setSelectionRange(activeSelStart, activeSelStart); } catch(e){}
+          }
+        }
+      }
+      /* Don't restore scroll on tab change — only on in-tab updates */
+      if (window.__keepScrollOnNextRender) {
+        window.scrollTo(0, scrollY);
+        window.__keepScrollOnNextRender = false;
+      }
+    });
+  };
+})();
+
+/* ---------- 5. iOS STABILITY: VIEWPORT & SCROLL FIXES ---------- */
+(function fixIOSStability() {
+  /* Lock viewport — prevent zoom and bounce */
+  const vp = document.querySelector('meta[name="viewport"]');
+  if (vp) {
+    vp.setAttribute('content', 'width=device-width,initial-scale=1,maximum-scale=1,minimum-scale=1,user-scalable=no,viewport-fit=cover,interactive-widget=resizes-content');
+  }
+  
+  /* Prevent over-scroll bounce on body but allow inside-element scrolling */
+  const stab = document.createElement('style');
+  stab.id = 'mb-stability';
+  stab.textContent = `
+    /* Stop iOS rubber-band scrolling on body */
+    html, body {
+      position: relative;
+      overscroll-behavior: none;
+      -webkit-overflow-scrolling: touch;
+    }
+    body.mobile-mode {
+      overscroll-behavior-y: contain;
+    }
+    /* Prevent text size adjustment on landscape rotation */
+    body {
+      -webkit-text-size-adjust: 100%;
+      -ms-text-size-adjust: 100%;
+    }
+    /* Inputs at 16px+ to prevent auto-zoom */
+    @media (max-width: 768px) {
+      input, textarea, select {
+        font-size: 16px !important;
+      }
+      input[type="date"], input[type="time"], input[type="datetime-local"] {
+        font-size: 16px !important;
+      }
+      /* Smooth momentum scrolling in scrollable areas */
+      .mb-content, .mb-sheet {
+        -webkit-overflow-scrolling: touch;
+        overscroll-behavior: contain;
+      }
+      /* Stop double-tap zoom */
+      button, .mb-status-btn, .mb-tab, .mb-iconbtn, .mb-section-header {
+        touch-action: manipulation;
+        -webkit-tap-highlight-color: transparent;
+        -webkit-user-select: none;
+        user-select: none;
+      }
+      /* Tap responsiveness */
+      .mb-item-card, .mb-status-btn, .mb-detail-btn {
+        cursor: pointer;
+      }
+    }
+  `;
+  document.head.appendChild(stab);
+  
+  /* Block pinch-zoom programmatically on iOS as backup */
+  document.addEventListener('gesturestart', (e) => e.preventDefault(), { passive: false });
+  document.addEventListener('gesturechange', (e) => e.preventDefault(), { passive: false });
+})();
+
+/* ---------- 6. JOBS LIST HOME SCREEN ---------- */
+/* Replace the Inspect tab landing if there's no active job */
+function renderMobileJobsList() {
+  const jobs = getJobsIndex();
+  let h = '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:14px">' +
+    '<h2 style="color:#0D1B2A;font-family:\'Barlow Condensed\';text-transform:uppercase;letter-spacing:1px;margin:0;font-size:18px">My Jobs</h2>' +
+    '<button class="mb-detail-btn primary" style="padding:10px 14px;font-size:13px" onclick="mbStartNewJob()">+ New Job</button>' +
+    '</div>';
+  
+  if (!jobs.length) {
+    h += '<div style="text-align:center;padding:40px 20px;color:#94a3b8;background:#fff;border-radius:12px">' +
+      '<div style="font-size:48px;margin-bottom:14px">📋</div>' +
+      '<p style="font-size:14px;color:#475569;font-weight:600">No jobs yet</p>' +
+      '<p style="font-size:12px;margin-top:6px">Tap "+ New Job" to start your first inspection.</p>' +
+      '<button class="mb-detail-btn primary" style="margin-top:18px;padding:14px 24px" onclick="mbStartNewJob()">+ Start First Job</button>' +
+      '</div>';
+    return h;
+  }
+  
+  jobs.forEach(j => {
+    const statusColor = j.status === 'Complete' ? '#16a34a' : j.status === 'Sent' ? '#2563eb' : j.status === 'In Progress' ? '#d97706' : '#64748b';
+    const dateStr = j.updatedAt ? new Date(j.updatedAt).toLocaleDateString('en-AU', { day: 'numeric', month: 'short', year: 'numeric' }) : '';
+    const inspName = (typeof INSPECTION_TYPES !== 'undefined' ? (INSPECTION_TYPES.find(t => t.id === j.inspectionType) || {}).name : '') || j.inspectionType || 'Inspection';
+    h += '<div class="mb-item-card" style="cursor:pointer;border-left-color:' + statusColor + '" onclick="mbOpenJob(\'' + j.id + '\')">' +
+      '<div style="display:flex;justify-content:space-between;align-items:flex-start;gap:8px">' +
+        '<div style="flex:1;min-width:0">' +
+          '<div class="mb-item-cat">' + esc(inspName) + '</div>' +
+          '<div class="mb-item-title" style="font-size:15px">' + esc(j.address || '—') + '</div>' +
+          '<div style="font-size:12px;color:#64748b;margin-top:2px">' + esc(j.clientName || 'No client') + '</div>' +
+        '</div>' +
+        '<span class="mb-chip" style="background:' + statusColor + ';color:#fff;flex-shrink:0">' + esc(j.status || 'Draft') + '</span>' +
+      '</div>' +
+      '<div class="mb-card-chips" style="margin-top:8px">' +
+        (j.defectCount ? '<span class="mb-chip" style="background:#fee2e2;color:#991b1b">⚠ ' + j.defectCount + ' defects</span>' : '') +
+        (j.photoCount ? '<span class="mb-chip">📷 ' + j.photoCount + '</span>' : '') +
+        '<span class="mb-chip">📅 ' + esc(dateStr) + '</span>' +
+      '</div>' +
+      '<div style="display:flex;gap:4px;margin-top:8px">' +
+        '<button class="mb-detail-btn" style="flex:1;padding:8px;font-size:11px" onclick="event.stopPropagation();mbDuplicateJob(\'' + j.id + '\')">Duplicate</button>' +
+        '<button class="mb-detail-btn" style="flex:1;padding:8px;font-size:11px;background:#fee2e2;color:#991b1b" onclick="event.stopPropagation();mbDeleteJob(\'' + j.id + '\')">Delete</button>' +
+      '</div>' +
+    '</div>';
+  });
+  
+  return h;
+}
+
+/* New job wizard */
+window.mbStartNewJob = function() {
+  haptic(10);
+  const types = typeof INSPECTION_TYPES !== 'undefined' ? INSPECTION_TYPES : [];
+  const typeOptions = types.map(t => '<option value="' + t.id + '">' + esc(t.name) + '</option>').join('');
+  
+  mbBottomSheet('New Job', 
+    '<p style="font-size:12px;color:#64748b;margin-bottom:14px">Set up a new inspection job. This creates a fresh isolated record — no carry-over from previous jobs.</p>' +
+    '<span class="mb-detail-label">Property address *</span>' +
+    '<input id="njAddr" class="mb-detail-input" placeholder="e.g. 123 Main St, Carlton VIC 3053" style="font-size:16px">' +
+    '<span class="mb-detail-label">Client name</span>' +
+    '<input id="njName" class="mb-detail-input" placeholder="Client full name" style="font-size:16px">' +
+    '<span class="mb-detail-label">Client email</span>' +
+    '<input id="njEmail" type="email" class="mb-detail-input" placeholder="client@example.com" style="font-size:16px">' +
+    '<span class="mb-detail-label">Client phone</span>' +
+    '<input id="njPhone" type="tel" class="mb-detail-input" placeholder="+61 ..." style="font-size:16px">' +
+    '<span class="mb-detail-label">Building class</span>' +
+    '<input id="njClass" class="mb-detail-input" placeholder="e.g. 1a, 2, 10a" style="font-size:16px">' +
+    '<span class="mb-detail-label">Inspection type *</span>' +
+    '<select id="njType" class="mb-detail-input" style="font-size:16px">' + typeOptions + '</select>' +
+    '<div class="mb-detail-actions" style="margin-top:18px">' +
+      '<button class="mb-detail-btn" onclick="mbCloseSheet()">Cancel</button>' +
+      '<button class="mb-detail-btn primary" onclick="mbCreateJob()">✓ Create Job</button>' +
+    '</div>'
+  );
+};
+
+window.mbCreateJob = async function() {
+  const addr = (document.getElementById('njAddr') || {}).value || '';
+  const name = (document.getElementById('njName') || {}).value || '';
+  const email = (document.getElementById('njEmail') || {}).value || '';
+  const phone = (document.getElementById('njPhone') || {}).value || '';
+  const cls = (document.getElementById('njClass') || {}).value || '';
+  const type = (document.getElementById('njType') || {}).value || 'PrePurchaseBP';
+  
+  if (!addr.trim()) {
+    showToast('Property address required', 'warn');
+    return;
+  }
+  
+  /* Save current job first if there is one */
+  if (getActiveJobId()) {
+    await reliableSave(true);
+  }
+  
+  /* Create new isolated job */
+  const newJob = createNewJob(name.trim(), addr.trim(), type);
+  newJob.client.email = email.trim();
+  newJob.client.phone = phone.trim();
+  newJob.client.class = cls.trim();
+  newJob.inspections.currentType = type;
+  
+  /* Wipe PROJECT and replace with the new job */
+  Object.keys(PROJECT).forEach(k => { delete PROJECT[k]; });
+  Object.keys(newJob).forEach(k => { PROJECT[k] = newJob[k]; });
+  
+  setActiveJobId(newJob.id);
+  
+  /* Save to IDB + LS + index */
+  await reliableSave(true);
+  
+  if (typeof rebuildLibraries === 'function') rebuildLibraries();
+  
+  mbCloseSheet();
+  haptic([10, 30, 10]);
+  showToast('✓ New job created', 'ok');
+  
+  /* Switch to inspect view */
+  MOBILE_STATE.activeTab = 'inspect';
+  MOBILE_STATE.expandedItem = null;
+  renderMobilePage();
+};
+
+window.mbOpenJob = async function(jobId) {
+  haptic(8);
+  /* Save current job first */
+  if (getActiveJobId() && getActiveJobId() !== jobId) {
+    await reliableSave(true);
+  }
+  
+  const ok = await loadJobIntoProject(jobId);
+  if (!ok) {
+    showToast('Could not load job', 'err');
+    return;
+  }
+  
+  MOBILE_STATE.activeTab = 'inspect';
+  MOBILE_STATE.expandedItem = null;
+  renderMobilePage();
+  showToast('📂 Loaded ' + (PROJECT.client?.address || 'job'), 'ok');
+};
+
+window.mbDeleteJob = async function(jobId) {
+  if (!confirm('Delete this job permanently? This cannot be undone.')) return;
+  /* Remove from IDB */
+  await jobsIdbDelete(jobId);
+  /* Remove from LS */
+  try {
+    localStorage.removeItem(SAVE_LS_FULL_KEY + '_' + jobId);
+    localStorage.removeItem(SAVE_LS_FULL_KEY + '_' + jobId + '_meta');
+  } catch(e){}
+  /* Remove from index */
+  let idx = getJobsIndex();
+  idx = idx.filter(j => j.id !== jobId);
+  setJobsIndex(idx);
+  /* If was active, clear active */
+  if (getActiveJobId() === jobId) {
+    setActiveJobId(null);
+    Object.keys(PROJECT).forEach(k => { delete PROJECT[k]; });
+    PROJECT.client = {};
+    PROJECT.inspections = { currentType: 'PrePurchaseBP' };
+    PROJECT.settings = {};
+  }
+  haptic(8);
+  showToast('Job deleted', 'ok');
+  renderMobilePage();
+};
+
+window.mbDuplicateJob = async function(jobId) {
+  const orig = await jobsIdbLoad(jobId);
+  if (!orig) {
+    showToast('Could not load source job', 'err');
+    return;
+  }
+  /* Save current first */
+  if (getActiveJobId()) await reliableSave(true);
+  /* Make a copy with a new ID and empty inspection data, keeping client */
+  const dup = createNewJob(orig.client?.name, orig.client?.address + ' (copy)', orig.inspectionType);
+  dup.client = JSON.parse(JSON.stringify(orig.client || {}));
+  dup.client.address = (dup.client.address || '') + ' (copy)';
+  dup.settings = JSON.parse(JSON.stringify(orig.settings || {}));
+  
+  Object.keys(PROJECT).forEach(k => { delete PROJECT[k]; });
+  Object.keys(dup).forEach(k => { PROJECT[k] = dup[k]; });
+  setActiveJobId(dup.id);
+  await reliableSave(true);
+  
+  if (typeof rebuildLibraries === 'function') rebuildLibraries();
+  haptic([10, 30, 10]);
+  showToast('✓ Job duplicated', 'ok');
+  renderMobilePage();
+};
+
+/* ---------- 7. ADD JOBS TAB / HOME ---------- */
+/* Override mobile tabs to include a Jobs/Home entry */
+(function injectJobsHome() {
+  if (typeof renderMobileTabBar !== 'function') return;
+  const origTabBar = window.renderMobileTabBar;
+  window.renderMobileTabBar = function() {
+    const tabs = [
+      { id: 'home', icon: '🏠', label: 'Jobs' },
+      { id: 'inspect', icon: '📋', label: 'Inspect' },
+      { id: 'actions', icon: '🎯', label: 'Actions' },
+      { id: 'reports', icon: '📑', label: 'Reports' },
+      { id: 'setup', icon: '⚙', label: 'Setup' }
+    ];
+    return '<div class="mb-tabbar">' +
+      tabs.map(t => 
+        '<button class="mb-tab ' + (MOBILE_STATE.activeTab === t.id ? 'active' : '') + '" onclick="mbSwitchTab(\'' + t.id + '\')">' +
+          '<span class="mb-tab-icon">' + t.icon + '</span>' +
+          '<span>' + esc(t.label) + '</span>' +
+        '</button>'
+      ).join('') +
+    '</div>';
+  };
+})();
+
+/* Inject "home" handler into renderMobilePage */
+(function injectHomeRender() {
+  if (typeof renderMobilePage !== 'function') return;
+  const orig = window.renderMobilePage;
+  window.renderMobilePage = function() {
+    if (!document.body.classList.contains('mobile-mode')) {
+      return orig.apply(this, arguments);
+    }
+    let html = renderMobileTopBar();
+    html += '<div class="mb-content">';
+    if (MOBILE_STATE.activeTab === 'home') {
+      html += renderMobileJobsList();
+    } else if (MOBILE_STATE.activeTab === 'inspect') {
+      /* If no active job, redirect to home */
+      if (!getActiveJobId()) {
+        html += '<div style="text-align:center;padding:40px 20px;color:#94a3b8;background:#fff;border-radius:12px">' +
+          '<div style="font-size:48px;margin-bottom:14px">📋</div>' +
+          '<p style="font-size:14px;color:#475569;font-weight:600">No active job</p>' +
+          '<p style="font-size:12px;margin-top:6px">Open or create a job to start inspecting.</p>' +
+          '<button class="mb-detail-btn primary" style="margin-top:18px;padding:14px 24px" onclick="mbSwitchTab(\'home\')">Go to Jobs</button>' +
+          '</div>';
+      } else {
+        html += renderMobileInspect();
+      }
+    } else if (MOBILE_STATE.activeTab === 'photos') {
+      html += renderMobilePhotos();
+    } else if (MOBILE_STATE.activeTab === 'actions') {
+      html += renderMobileActions();
+    } else if (MOBILE_STATE.activeTab === 'reports') {
+      html += renderMobileReports();
+    } else if (MOBILE_STATE.activeTab === 'setup') {
+      html += renderMobileSetup();
+    }
+    html += '</div>';
+    html += renderMobileTabBar();
+    const pagesDiv = document.getElementById('pages');
+    if (pagesDiv) pagesDiv.innerHTML = html;
+  };
+})();
+
+/* ---------- 8. INITIAL JOB SETUP ---------- */
+/* On first load, if there's existing PROJECT data but no active job, convert to a job */
+(async function migrateLegacyOnFirstLoad() {
+  setTimeout(async () => {
+    const activeId = getActiveJobId();
+    const jobs = getJobsIndex();
+    
+    /* If there's an active job, load it */
+    if (activeId) {
+      const ok = await loadJobIntoProject(activeId);
+      if (ok && typeof renderPages === 'function') renderPages();
+      return;
+    }
+    
+    /* If no active job but legacy IDB data exists, migrate it as Job 1 */
+    if (!jobs.length) {
+      try {
+        const legacy = await idbLoad(IDB_KEY);
+        if (legacy && (legacy.client?.address || legacy.client?.name)) {
+          const migrated = createNewJob(legacy.client?.name, legacy.client?.address, legacy.inspections?.currentType);
+          /* Copy everything over */
+          Object.assign(migrated, legacy);
+          migrated.id = migrated.id || 'JOB_LEGACY_' + Date.now().toString(36);
+          
+          Object.keys(PROJECT).forEach(k => { delete PROJECT[k]; });
+          Object.keys(migrated).forEach(k => { PROJECT[k] = migrated[k]; });
+          setActiveJobId(migrated.id);
+          await reliableSave(true);
+          if (typeof renderPages === 'function') renderPages();
+          showToast('📂 Migrated previous data into Job', 'ok');
+          return;
+        }
+      } catch(e) { console.warn('Migration check failed:', e); }
+    }
+    
+    /* No jobs at all — start on home tab */
+    if (typeof MOBILE_STATE !== 'undefined') {
+      MOBILE_STATE.activeTab = 'home';
+      if (typeof renderPages === 'function') renderPages();
+    }
+  }, 1000);
+})();
+
+console.log('[Phase A] Job model + bulletproof save + nav preservation + iOS stability loaded');
+
+
+
+/* ============================================================
+   PHASE B — COMPREHENSIVE INSPECTION TEMPLATES
+   Replaces sparse template item lists with industry-comprehensive versions.
+   Standard mode shows ~150 items, Comprehensive mode reveals ~280.
+   Conditional: items tagged "comprehensive" only show when toggle on.
+   ============================================================ */
+
+/* All templates as zone-organised arrays. Each entry: 
+   { zone, item, std (true=standard), comp (true=comprehensive only) } 
+   We flatten to insp.items at load and tag with section. */
+
+const PHASE_B_TEMPLATES = {
+  /* ---- COMBINED PRE-PURCHASE BUILDING + PEST (AS 4349.1 + 4349.3) ---- */
+  PrePurchaseBP: {
+    name: 'Pre-Purchase Building + Pest Inspection',
+    standard: 'AS 4349.1 (Building) + AS 4349.3 (Pest / Timber Pest)',
+    scope: 'Visual, non-invasive inspection of accessible areas — structure, roof void, sub-floor, exterior, interior, services, site, ancillary, plus parallel timber pest inspection covering active termites, damage, conducive conditions, decay and borer activity.',
+    sections: [
+      { name: 'SITE & EXTERNAL', items: [
+        ['Surface drainage falls — directs water away from building', 'std'],
+        ['Stormwater discharge — visible connection to legal point', 'std'],
+        ['Driveway / crossover — condition, gradient, trip hazards', 'std'],
+        ['Paving & paths — cracks, lippage, ponding', 'std'],
+        ['Retaining walls — lean, cracking, weep holes', 'std'],
+        ['Fencing — condition, plumb, security', 'std'],
+        ['Garden beds — soil contact with walls, weep hole obstruction', 'std'],
+        ['Vegetation — proximity to building, root encroachment', 'std'],
+        ['Trees — within 1.5m of structure, species risk', 'comp'],
+        ['Site grading — fall toward/away from building', 'std'],
+        ['External garden taps — backflow prevention', 'comp'],
+        ['Outbuildings / sheds — condition, separation', 'comp'],
+        ['Letterbox / pier — lean, condition', 'comp'],
+        ['Sediment / erosion management', 'comp'],
+        ['Boundary surveys / encroachments visible', 'comp']
+      ]},
+      { name: 'ROOF EXTERIOR', items: [
+        ['Roof covering — tiles / sheet — condition, broken units', 'std'],
+        ['Ridge capping — pointing, bedding, alignment', 'std'],
+        ['Hips & valleys — condition, debris, flashing', 'std'],
+        ['Verges — finish, fixing, weather seal', 'std'],
+        ['Flashings — chimney, wall step, parapet, penetrations', 'std'],
+        ['Gutters — fall, debris, corrosion, joints', 'std'],
+        ['Downpipes — secure, blocked, discharge point', 'std'],
+        ['Fascia — condition, paintwork, deflection', 'std'],
+        ['Eaves & soffits — staining, fascia, deflection', 'std'],
+        ['Antennas / dishes — fixing security', 'comp'],
+        ['Solar PV — mounting flashings, panel condition', 'comp'],
+        ['Skylights — flashing, glazing, framing', 'std'],
+        ['Roof vents — condition, screening', 'comp'],
+        ['Air-con condenser — mounting, drainage', 'comp'],
+        ['Roof safety mesh — where visible', 'comp'],
+        ['Penetrations sealed — vents, pipes, cables', 'std'],
+        ['Tile cleanliness / lichen / moss', 'comp'],
+        ['Roof slope — adequate for material type', 'comp']
+      ]},
+      { name: 'ROOF VOID / CEILING SPACE', items: [
+        ['Access — manhole present, lockable, safe', 'std'],
+        ['Framing — trusses, rafters, ceiling joists', 'std'],
+        ['Truss tie-downs — visible chain to plate', 'comp'],
+        ['Bracing — wall and roof brace visible', 'comp'],
+        ['Sarking — present, condition, tears', 'std'],
+        ['Insulation — type, R-value, coverage, displacement', 'std'],
+        ['Reflective foil orientation', 'comp'],
+        ['Evidence of past leaks — staining, watermarks', 'std'],
+        ['Active leaks at time of inspection', 'std'],
+        ['Downlight covers — insulation safety clearance', 'comp'],
+        ['Electrical visible — cabling, junction boxes', 'comp'],
+        ['Plumbing penetrations — pipes, flues', 'comp'],
+        ['Air ducting — sealed, supported', 'comp'],
+        ['Whirlybird / ventilator — operation', 'comp'],
+        ['Termite activity — mudding, carton, frass', 'std'],
+        ['Borer evidence — exit holes, frass', 'std'],
+        ['Rot / decay — moisture-damaged timber', 'std'],
+        ['Animal/bird ingress — droppings, nesting', 'comp']
+      ]},
+      { name: 'EXTERNAL WALLS — Front', items: [
+        ['Wall materials — brick / render / weatherboard / cladding', 'std'],
+        ['Cracking — Category 1-4 mapping', 'std'],
+        ['Render — delamination, hollow areas', 'std'],
+        ['Paintwork — flaking, fading, substrate moisture', 'std'],
+        ['Weep holes — present, clear, above DPC', 'std'],
+        ['DPC — visible, above ground level', 'std'],
+        ['Control / movement joints — sealed, intact', 'comp'],
+        ['Lintels — over openings, deflection, corrosion', 'comp'],
+        ['Brick veneer ties — assessment from openings', 'comp'],
+        ['Combustible cladding (ACP/EPS) — present?', 'std'],
+        ['Wall ventilation — sub-floor vents clear', 'comp']
+      ]},
+      { name: 'EXTERNAL WALLS — Rear', items: [
+        ['Wall materials & condition', 'std'],
+        ['Cracking, render condition, paintwork', 'std'],
+        ['Weep holes, DPC level', 'std'],
+        ['Door/window flashings — alfresco/deck integration', 'comp'],
+        ['Penetrations sealed — services, gas, plumbing', 'comp']
+      ]},
+      { name: 'EXTERNAL WALLS — Sides', items: [
+        ['Left & right elevations — condition summary', 'std'],
+        ['Cracks, render, paint per elevation', 'std'],
+        ['Boundary clearance, neighbouring property impact', 'comp']
+      ]},
+      { name: 'WINDOWS & DOORS — EXTERNAL', items: [
+        ['Frames — material, condition, plumb', 'std'],
+        ['Glazing — cracks, fogging (DG seal failure)', 'std'],
+        ['Safety glazing — Grade A markings where required', 'std'],
+        ['Sliding tracks — operation, dirt buildup', 'comp'],
+        ['Hardware — locks, hinges, handles', 'std'],
+        ['Weather seals — perished, missing', 'std'],
+        ['Flashings & sealants', 'std'],
+        ['Window restrictors — sill < 1700mm', 'std'],
+        ['Energy ratings — NatHERS sticker check', 'comp'],
+        ['Security door — emergency release internal', 'comp']
+      ]},
+      { name: 'SUB-FLOOR', items: [
+        ['Access — adequate, safe to enter', 'std'],
+        ['Ventilation — vents present, clear, sized', 'std'],
+        ['Moisture — standing water, damp ground', 'std'],
+        ['Bearers — condition, deflection, sag', 'std'],
+        ['Joists — condition, spacing, end bearing', 'std'],
+        ['Stumps / piers — lean, settlement, ant caps', 'std'],
+        ['Ant caps — fitted to all piers', 'std'],
+        ['Termite barrier — Part A & B status', 'std'],
+        ['Termite management notice — at meter box', 'comp'],
+        ['Active termite workings', 'std'],
+        ['Past termite damage — galleries', 'std'],
+        ['Conducive conditions — debris, formwork', 'std'],
+        ['Fungal decay — brown/white rot', 'std'],
+        ['Borer evidence', 'std'],
+        ['Plumbing leaks visible', 'std'],
+        ['Electrical visible — cabling, fittings', 'comp'],
+        ['Slab edge exposure / damage', 'comp'],
+        ['Sub-floor stored material — termite risk', 'comp']
+      ]},
+      { name: 'INTERIOR — Entry / Hallway', items: [
+        ['Walls — cracking, paint, plaster', 'std'],
+        ['Ceiling — sag, staining, cornice', 'std'],
+        ['Floor — covering condition, level', 'std'],
+        ['Doors — operation, hardware', 'std'],
+        ['Smoke alarm — present, type, hardwired', 'std'],
+        ['Lighting — operation', 'std']
+      ]},
+      { name: 'INTERIOR — Lounge / Living', items: [
+        ['Walls, ceilings, floors', 'std'],
+        ['Windows — operation, locks', 'std'],
+        ['Heating / cooling units', 'std'],
+        ['Power outlets — secure, RCD?', 'std'],
+        ['Skirting / architraves', 'comp'],
+        ['Ventilation — natural', 'comp']
+      ]},
+      { name: 'INTERIOR — Dining / Family', items: [
+        ['Walls, ceilings, floors', 'std'],
+        ['Windows / doors operation', 'std'],
+        ['Electrical fittings', 'std']
+      ]},
+      { name: 'INTERIOR — Kitchen', items: [
+        ['Cabinets — alignment, hinges, doors', 'std'],
+        ['Bench top — joints, sealant, finish', 'std'],
+        ['Splashback — sealant, condition', 'std'],
+        ['Sink — drainage, leaks under', 'std'],
+        ['Tapware — operation, leaks', 'std'],
+        ['Cooktop — gas/electric, isolation', 'std'],
+        ['Oven — operation (visual)', 'std'],
+        ['Range hood — operation, vent to exterior', 'std'],
+        ['Dishwasher — connection, leaks', 'comp'],
+        ['Tile floor — lippage, cracks', 'std'],
+        ['Walls & ceiling — cracks, mould', 'std'],
+        ['GPOs near sink — RCD/distance compliance', 'comp']
+      ]},
+      { name: 'INTERIOR — Master Bedroom', items: [
+        ['Walls, ceilings, floors', 'std'],
+        ['Robe / WIR — doors, shelving', 'std'],
+        ['Windows — operation, restrictors if above ground', 'std'],
+        ['Smoke alarm — bedroom required', 'std']
+      ]},
+      { name: 'INTERIOR — Other Bedrooms', items: [
+        ['Per bedroom: walls / ceiling / floor / window / smoke alarm', 'std']
+      ]},
+      { name: 'INTERIOR — Main Bathroom', items: [
+        ['Floor — tile, lippage, fall to waste', 'std'],
+        ['Walls — tile, sealant integrity', 'std'],
+        ['Shower — screen, base, leak evidence', 'std'],
+        ['Shower waterproofing — visible signs', 'std'],
+        ['Bath — condition, sealant, overflow', 'std'],
+        ['Vanity — basin, taps, drainage', 'std'],
+        ['Toilet — pan, cistern, seal', 'std'],
+        ['Ventilation — fan ducted exterior', 'std'],
+        ['Heat lamp / exhaust — operation', 'comp'],
+        ['Grout — condition, mould', 'std'],
+        ['Door — undercut, no swelling', 'comp']
+      ]},
+      { name: 'INTERIOR — Ensuite', items: [
+        ['As bathroom — replicate all items', 'std']
+      ]},
+      { name: 'INTERIOR — Laundry', items: [
+        ['Tub / cabinet — condition, leaks', 'std'],
+        ['Tapware — washing machine connections', 'std'],
+        ['Waste fixed — to gully or trap', 'std'],
+        ['Floor waste / fall', 'std'],
+        ['Ventilation', 'comp'],
+        ['Walls & ceiling', 'std']
+      ]},
+      { name: 'INTERIOR — Other Wet Areas / WC', items: [
+        ['Powder room / separate WC items', 'std']
+      ]},
+      { name: 'INTERIOR — Stairs / Landing', items: [
+        ['Treads / risers — uniform dimensions', 'std'],
+        ['Handrail — height, continuity', 'std'],
+        ['Balustrade — height, climbable, gap < 125mm', 'std'],
+        ['Stair nosing — contrast strip', 'comp'],
+        ['Carpet / tread covering — condition', 'std']
+      ]},
+      { name: 'SERVICES — Electrical', items: [
+        ['Switchboard — labels, RCDs, circuit count', 'std'],
+        ['RCDs — all power + light protected', 'std'],
+        ['Power outlets — sample test (visual)', 'std'],
+        ['Light fittings — operation', 'std'],
+        ['Smoke alarms — all bedrooms, paths', 'std'],
+        ['Hardwired alarms — interconnected', 'std'],
+        ['Cable damage visible', 'comp'],
+        ['Outdoor outlets — IPX rating', 'comp'],
+        ['EV charger — if present', 'comp']
+      ]},
+      { name: 'SERVICES — Plumbing', items: [
+        ['Hot water service — type, age, operation', 'std'],
+        ['Tempering valve — 50°C max bathroom', 'std'],
+        ['Mains water pressure — adequate', 'std'],
+        ['Drainage — sinks, basins drain freely', 'std'],
+        ['Visible leaks at fittings', 'std'],
+        ['Water meter — accessible, no leak', 'comp']
+      ]},
+      { name: 'SERVICES — Gas (if present)', items: [
+        ['Gas meter location', 'std'],
+        ['Visible gas lines — condition', 'std'],
+        ['Gas appliance flues — vented exterior', 'std']
+      ]},
+      { name: 'SERVICES — HVAC', items: [
+        ['Heating system type & operation', 'std'],
+        ['Cooling system type & operation', 'std'],
+        ['Ducting condition (where visible)', 'comp'],
+        ['Filter access', 'comp']
+      ]},
+      { name: 'GARAGE & ANCILLARY', items: [
+        ['Garage door — operation, auto-reverse', 'std'],
+        ['Garage door tracks & springs', 'std'],
+        ['Walls, floor, lighting', 'std'],
+        ['Internal access door — fire rating if attached', 'comp'],
+        ['Carport / freestanding shed', 'std']
+      ]},
+      { name: 'POOL / SPA (if present)', items: [
+        ['Barrier height ≥ 1200mm', 'std'],
+        ['Gates self-close/latch', 'std'],
+        ['Climbable zone (NCZ) compliance', 'std'],
+        ['CPR sign — present, current', 'std'],
+        ['Form 23 / Council registration', 'std'],
+        ['Pool surrounds — slip resistance, cracks', 'comp']
+      ]},
+      { name: 'COMBUSTIBLE CLADDING ASSESSMENT', items: [
+        ['ACP / EPS cladding present?', 'std'],
+        ['Cladding Safety Victoria notice on file', 'comp'],
+        ['Performance solution documentation', 'comp']
+      ]},
+      { name: 'PEST — Active Termite Activity', items: [
+        ['Active mudding — slab edge / internal wall', 'std'],
+        ['Live termites in damaged timber', 'std'],
+        ['Alate (swarmer) wings — recent', 'std'],
+        ['Carton / gallery material in roof void', 'std'],
+        ['Active in landscape timber adjacent', 'std']
+      ]},
+      { name: 'PEST — Past Damage', items: [
+        ['Visible damaged timber — extent', 'std'],
+        ['Damage to structural members', 'std'],
+        ['Galleries in non-structural elements', 'std']
+      ]},
+      { name: 'PEST — Conducive Conditions', items: [
+        ['Sub-floor moisture / poor ventilation', 'std'],
+        ['Timber-to-soil contact (structural)', 'std'],
+        ['Garden beds against walls', 'std'],
+        ['Stored material against external walls', 'std'],
+        ['Tree stumps within 25m', 'comp'],
+        ['Plumbing leaks creating moisture', 'std']
+      ]},
+      { name: 'PEST — Treatment Systems', items: [
+        ['Part A barrier durability', 'comp'],
+        ['Part B chemical zone — age, service tag', 'std'],
+        ['Termite Durable Notice at meter box', 'std'],
+        ['Annual inspection recommendation given', 'std']
+      ]},
+      { name: 'PEST — Wood Decay / Borer', items: [
+        ['Brown / white rot in sub-floor', 'std'],
+        ['Wet rot adjacent to leak sources', 'std'],
+        ['Anobium frass — active', 'std'],
+        ['Lyctus exit holes — hardwood', 'comp'],
+        ['EHB suspect — specialist referral', 'comp']
+      ]}
+    ]
+  },
+
+  /* ---- CONSTRUCTION STAGE — PRE-POUR / SLAB ---- */
+  StagePrePour: {
+    name: 'Construction Stage 1 — Pre-Pour / Slab',
+    standard: 'AS 2870 / NCC Vol 2',
+    scope: 'Pre-pour inspection of footings, slab and reinforcement immediately before concrete pour. Verifies site classification, formwork, reinforcement, vapour barrier, service penetrations and set-out per documentation.',
+    sections: [
+      { name: 'SITE & SET-OUT', items: [
+        ['Site classification matches design (S, M, H, P)', 'std'],
+        ['Geotech / soil report available on site', 'std'],
+        ['Building permit & approved plans on site', 'std'],
+        ['Building footprint — dimensions match plans', 'std'],
+        ['Setback distances correct from boundaries', 'std'],
+        ['Site benchmark / level reference established', 'std'],
+        ['Adjoining property protection per s84', 'comp']
+      ]},
+      { name: 'EXCAVATION', items: [
+        ['Excavation to design depth', 'std'],
+        ['Bottom of excavation clean (no loose soil)', 'std'],
+        ['Sides stable / shored where required', 'std'],
+        ['Trench widths per design', 'std'],
+        ['Drainage clear of working area', 'comp']
+      ]},
+      { name: 'FORMWORK', items: [
+        ['Formwork plumb and level', 'std'],
+        ['Formwork to design line and level', 'std'],
+        ['Form ties / supports adequate', 'std'],
+        ['Internal formwork (where applicable)', 'comp'],
+        ['Releasing agent applied', 'comp']
+      ]},
+      { name: 'VAPOUR BARRIER', items: [
+        ['Vapour barrier installed', 'std'],
+        ['No tears or punctures', 'std'],
+        ['Continuous — overlaps taped 200mm', 'std'],
+        ['Edges turned up at perimeter', 'std'],
+        ['Penetrations sealed around services', 'std']
+      ]},
+      { name: 'REINFORCEMENT', items: [
+        ['Mesh size matches engineering spec', 'std'],
+        ['Bar chairs / spacers — correct height', 'std'],
+        ['Cover bottom (40mm typical) achieved', 'std'],
+        ['Cover top (30mm typical) achieved', 'std'],
+        ['Laps adequate (500mm minimum mesh)', 'std'],
+        ['Tied at intersections (required points)', 'comp'],
+        ['Edge bars present per design', 'std'],
+        ['Trench mesh / cage in beam zones', 'std'],
+        ['Starter bars for walls present', 'std'],
+        ['Bottom and top reinforcement separated correctly', 'comp']
+      ]},
+      { name: 'WAFFLE POD SLABS', items: [
+        ['Pod height matches design', 'std'],
+        ['Pods stable, no displacement', 'std'],
+        ['Mesh on top of pods correct height', 'std'],
+        ['Edge beams formed correctly', 'comp']
+      ]},
+      { name: 'SERVICE PENETRATIONS', items: [
+        ['Plumbing penetrations — locations match plans', 'std'],
+        ['Plumbing penetrations sealed with termite collar', 'std'],
+        ['Electrical conduits in place', 'std'],
+        ['Communications conduits in place', 'comp'],
+        ['Gas penetration (if required) correct location', 'std'],
+        ['Pit / sump positions per drainage plan', 'std']
+      ]},
+      { name: 'TERMITE MANAGEMENT (PRE-POUR)', items: [
+        ['Part A barrier installed (if specified)', 'std'],
+        ['Reticulation system fill points marked', 'std'],
+        ['Termite collar at every penetration', 'std'],
+        ['Edge protection (where required)', 'comp']
+      ]},
+      { name: 'ENGINEER / CERTIFIER SIGN-OFF', items: [
+        ['Engineer pre-pour certification obtained', 'std'],
+        ['Mandatory notification stage met', 'std'],
+        ['Inspector booked for pour day', 'comp'],
+        ['Concrete supplier confirmed (strength, slump)', 'std'],
+        ['Weather forecast suitable for pour', 'comp']
+      ]}
+    ]
+  },
+
+  /* ---- CONSTRUCTION STAGE — FRAME ---- */
+  StageFrame: {
+    name: 'Construction Stage 2 — Frame Inspection',
+    standard: 'AS 1684 (Timber) / AS/NZS 4600 (Steel) / NCC Vol 2',
+    scope: 'Inspection of completed structural framing prior to lining. Verifies bracing, tie-downs, member sizes, spacings, plumb/level, openings and AS 1684 compliance.',
+    sections: [
+      { name: 'BOTTOM PLATE & TIE-DOWN TO SLAB', items: [
+        ['Bottom plate full bearing on slab', 'std'],
+        ['Bottom plate fixings 50–70mm from edge', 'std'],
+        ['Fixings at AS 1684 spacing', 'std'],
+        ['Plate not overhanging slab > 10mm', 'std'],
+        ['Where overhang exists, engineer cert provided', 'comp'],
+        ['Damp proof course between plate and slab', 'std']
+      ]},
+      { name: 'STUDS & WALL FRAMES', items: [
+        ['Stud size matches design (typically 90×35)', 'std'],
+        ['Stud spacing per AS 1684 (450/600mm)', 'std'],
+        ['Studs plumb (within 5mm in 1.8m)', 'std'],
+        ['Wall plates straight (within 3mm in 3m)', 'std'],
+        ['Wall plates connected at corners', 'std'],
+        ['Noggings at correct vertical spacing', 'comp'],
+        ['Studs at door / window openings doubled', 'std'],
+        ['Cripple studs in place', 'comp']
+      ]},
+      { name: 'LINTELS / OPENINGS', items: [
+        ['Lintel size matches AS 1684 tables', 'std'],
+        ['Lintel bearing length adequate', 'std'],
+        ['Trimmer studs supporting lintels', 'std'],
+        ['Lintel deflection visible — engineer review', 'std'],
+        ['Steel lintels — corrosion protection', 'comp']
+      ]},
+      { name: 'TOP PLATES', items: [
+        ['Top plate joints over studs / lap correctly', 'std'],
+        ['Continuous over openings (or strap)', 'std'],
+        ['Splice positions correct', 'comp']
+      ]},
+      { name: 'BRACING — AS 1684 SECTION 8', items: [
+        ['Bracing schedule on site', 'std'],
+        ['Bracing locations match schedule', 'std'],
+        ['Bracing wall sheets nailed at required centres', 'std'],
+        ['Diagonal brace orientation correct', 'std'],
+        ['Bracing achieves required force (kN)', 'std'],
+        ['No bracing wall openings exceed limit', 'comp']
+      ]},
+      { name: 'TIE-DOWNS — AS 1684 SECTION 9', items: [
+        ['Roof to top plate tie-down', 'std'],
+        ['Top plate to studs tie-down', 'std'],
+        ['Bottom plate to slab fixings (counted)', 'std'],
+        ['Tie-down chain continuous to footing', 'std'],
+        ['Required tie-down spacing met', 'std'],
+        ['Cyclonic / high-wind zones — additional fixings', 'comp']
+      ]},
+      { name: 'CEILING & ROOF FRAMING', items: [
+        ['Ceiling joist size per AS 1684', 'std'],
+        ['Trusses installed as per supplier layout', 'std'],
+        ['Truss spacing per design', 'std'],
+        ['Truss bottom chord ties / braces', 'std'],
+        ['Trusses not modified on site', 'std'],
+        ['Top chord lateral restraint', 'comp'],
+        ['Hip / valley sets correct', 'comp'],
+        ['Hangers, joist hangers correct type', 'comp']
+      ]},
+      { name: 'FLOOR FRAMING (if upper level)', items: [
+        ['Joist size & spacing per design', 'std'],
+        ['Joist hangers / end-bearing correct', 'std'],
+        ['Strutting at mid-span', 'std'],
+        ['Flooring fixed and gluing (if applicable)', 'comp']
+      ]},
+      { name: 'PLUMB & LEVEL CHECK', items: [
+        ['Walls plumb (3mm in 3m)', 'std'],
+        ['Floors level — laser check', 'std'],
+        ['Internal dimensions match plans', 'std'],
+        ['Door / window openings square', 'std']
+      ]},
+      { name: 'MATERIALS & TREATMENT', items: [
+        ['Timber durability rating correct for use', 'std'],
+        ['H2/H3 treated where required', 'std'],
+        ['Galvanised fixings in coastal/treated zones', 'comp'],
+        ['Steel framing — galv. condition', 'comp']
+      ]}
+    ]
+  },
+
+  /* ---- CONSTRUCTION STAGE — PRE-PLASTER / LOCK-UP ---- */
+  StageLockup: {
+    name: 'Construction Stage 3 — Pre-Plaster / Lock-up',
+    standard: 'NCC H2/H4/H6 / AS 3740 / AS/NZS 4859',
+    scope: 'Inspection after roofing and external doors/windows installed and before plaster lining. Critical for waterproofing, insulation, services rough-in.',
+    sections: [
+      { name: 'ROOFING & WEATHER ENVELOPE', items: [
+        ['Roof complete and weather-tight', 'std'],
+        ['All flashings installed', 'std'],
+        ['Sarking continuous, no tears', 'std'],
+        ['Penetrations sealed (vents, pipes)', 'std'],
+        ['Gutters & downpipes operational', 'std']
+      ]},
+      { name: 'WINDOWS & EXTERNAL DOORS', items: [
+        ['Windows installed plumb and square', 'std'],
+        ['Window flashings correctly fitted', 'std'],
+        ['Sealant around frames continuous', 'std'],
+        ['Doors hung, operating, weather-sealed', 'std'],
+        ['Sliding door tracks installed', 'comp'],
+        ['Garage door fitted (if present)', 'comp']
+      ]},
+      { name: 'WATERPROOFING ROUGH-IN', items: [
+        ['Wet area waterproofing membrane installed', 'std'],
+        ['Membrane to AS 3740 — turn-ups, hob', 'std'],
+        ['Shower hob waterproof', 'std'],
+        ['Floor wastes installed with membrane', 'std'],
+        ['Deck / balcony waterproofing if applicable', 'std'],
+        ['Penetrations sealed with sleeves / collars', 'std']
+      ]},
+      { name: 'INSULATION', items: [
+        ['Wall insulation installed (batts/rigid)', 'std'],
+        ['R-value matches NatHERS specification', 'std'],
+        ['Full coverage — no gaps or compression', 'std'],
+        ['Ceiling insulation in place', 'std'],
+        ['Floor insulation (if specified)', 'comp'],
+        ['Sarking / vapour barrier correct orientation', 'comp']
+      ]},
+      { name: 'PLUMBING ROUGH-IN', items: [
+        ['Hot/cold water rough-in complete', 'std'],
+        ['Drainage stacks and venting installed', 'std'],
+        ['Pipe sizes per AS 3500.1', 'comp'],
+        ['Pressure test passed (visual evidence)', 'std'],
+        ['Penetrations through frame protected', 'comp']
+      ]},
+      { name: 'ELECTRICAL ROUGH-IN', items: [
+        ['Wiring run to all points on plan', 'std'],
+        ['Cables clipped and supported', 'std'],
+        ['Switchboard rough-in installed', 'std'],
+        ['Smoke alarm wiring to all required rooms', 'std'],
+        ['Data / TV cabling installed', 'comp'],
+        ['NBN connection point', 'comp']
+      ]},
+      { name: 'MECHANICAL / HVAC ROUGH-IN', items: [
+        ['Ducting installed if specified', 'std'],
+        ['Exhaust fan locations marked / installed', 'std'],
+        ['Range hood vent to exterior', 'std'],
+        ['Air-con condenser pad / bracket in place', 'comp']
+      ]},
+      { name: 'SMOKE ALARMS', items: [
+        ['Locations match NCC H3D9 — bedrooms, paths', 'std'],
+        ['Hardwired with battery backup', 'std'],
+        ['Interconnected (all alarms)', 'std']
+      ]},
+      { name: 'PRE-LINING CHECKS', items: [
+        ['Frame moisture content < 18%', 'comp'],
+        ['Frame protected from rain', 'std'],
+        ['No insulation gaps before plaster goes on', 'std']
+      ]}
+    ]
+  },
+
+  /* ---- CONSTRUCTION STAGE — FIXING / 2ND FIX ---- */
+  StageFixing: {
+    name: 'Construction Stage 4 — Fixing / 2nd Fix',
+    standard: 'NCC / VBA Guide / Manufacturer specifications',
+    scope: 'Inspection after lining complete and before final finishes. Internal joinery, doors, architraves, skirtings, and 2nd-fix services.',
+    sections: [
+      { name: 'PLASTER LINING', items: [
+        ['Walls plumb and straight (Level 4 finish)', 'std'],
+        ['Joints flush — no peaking', 'std'],
+        ['Ceilings flat — no sag', 'std'],
+        ['Cornice installation continuous', 'std'],
+        ['Nail / screw holes filled', 'std'],
+        ['Wet area linings (where applicable) installed', 'std']
+      ]},
+      { name: 'INTERNAL DOORS', items: [
+        ['Doors hung — operating freely', 'std'],
+        ['Gap to frame consistent (3–5mm)', 'std'],
+        ['Door bottom clearance for floor covering', 'std'],
+        ['Hardware fitted — locks, handles, latches', 'std'],
+        ['Door stops fitted', 'comp']
+      ]},
+      { name: 'ARCHITRAVES & SKIRTING', items: [
+        ['Architraves square at corners', 'std'],
+        ['Skirting tight to floor (or stair)', 'std'],
+        ['Joints aligned and filled', 'std'],
+        ['Consistent reveal / proud-ness', 'comp']
+      ]},
+      { name: 'JOINERY — KITCHEN', items: [
+        ['Cabinets level and plumb', 'std'],
+        ['Doors aligned, hinges adjusted', 'std'],
+        ['Drawer fronts level and consistent', 'std'],
+        ['Bench top level, joints flush', 'std'],
+        ['Splashback installed and sealed', 'std'],
+        ['Sink cut-out neat and sealed', 'comp'],
+        ['Cooktop cut-out neat', 'comp']
+      ]},
+      { name: 'JOINERY — BATHROOMS & VANITIES', items: [
+        ['Vanity installed level', 'std'],
+        ['Basin installed and sealed', 'std'],
+        ['Mirror / shaving cabinet fitted', 'std'],
+        ['Towel rails, holders fitted', 'comp']
+      ]},
+      { name: 'WARDROBES', items: [
+        ['Robe doors fitted and aligned', 'std'],
+        ['Shelving and hanging rails installed', 'std'],
+        ['Tracks (sliding) operating', 'std']
+      ]},
+      { name: 'TILING', items: [
+        ['Floor tiles level and consistent', 'std'],
+        ['Wall tiles plumb and aligned', 'std'],
+        ['Grout colour consistent, joints filled', 'std'],
+        ['Movement joints provided per AS 3958', 'std'],
+        ['Edge trim / bullnose neat', 'comp'],
+        ['Floor falls correct to wastes', 'std']
+      ]},
+      { name: '2ND-FIX ELECTRICAL', items: [
+        ['All GPOs fitted and operational', 'std'],
+        ['Switches operational', 'std'],
+        ['Light fittings installed', 'std'],
+        ['Smoke alarms operational and tested', 'std'],
+        ['Exhaust fans operational', 'std'],
+        ['Heat lamps (where present) operational', 'comp']
+      ]},
+      { name: '2ND-FIX PLUMBING', items: [
+        ['All tapware fitted and operating', 'std'],
+        ['No leaks at fittings', 'std'],
+        ['Toilet pan installed and sealed', 'std'],
+        ['Shower screen installed', 'std'],
+        ['Drainage operational at all fixtures', 'std']
+      ]}
+    ]
+  },
+
+  /* ---- CONSTRUCTION STAGE — PCI (PRACTICAL COMPLETION) ---- */
+  StagePCI: {
+    name: 'Construction Stage 5 — PCI (Practical Completion)',
+    standard: 'NCC / VBA Guide / Contract specifications',
+    scope: 'Comprehensive practical completion inspection. Snagging-grade detail covering every cosmetic and functional item room-by-room.',
+    sections: [
+      { name: 'EXTERNAL — FINAL', items: [
+        ['Paintwork — even coverage, no runs', 'std'],
+        ['Render finish — colour & texture consistent', 'std'],
+        ['External fixtures (lights, taps) fitted', 'std'],
+        ['Gutters and downpipes — discharge correct', 'std'],
+        ['Site cleaned of construction debris', 'std'],
+        ['Driveway/path finished', 'std'],
+        ['Letterbox installed', 'comp']
+      ]},
+      { name: 'INTERNAL — EVERY ROOM', items: [
+        ['Paintwork — no flicks, runs, holidays', 'std'],
+        ['Paint at junctions clean (no overshoot)', 'std'],
+        ['Walls — no dents, marks, repairs visible', 'std'],
+        ['Ceilings — flat, no sag, no marks', 'std'],
+        ['Cornice — uniform, no gaps', 'std'],
+        ['Skirtings — clean, no marks', 'std'],
+        ['Architraves — clean, no marks', 'std'],
+        ['Floor finishes — no damage, no scratches', 'std'],
+        ['Carpet — stretched, no ripples, seams flat', 'std'],
+        ['Doors — operate, hardware works', 'std'],
+        ['Windows — operate, lock, latch', 'std'],
+        ['Power points / switches — operational, secure', 'std'],
+        ['Light fittings — correct, operational', 'std']
+      ]},
+      { name: 'WET AREAS — FINAL CHECK', items: [
+        ['Silicone joints — clean, no bubbles', 'std'],
+        ['Shower screen — sealed, operating', 'std'],
+        ['Toilet — operates, no leaks at base', 'std'],
+        ['Vanity tapware — operates, no leaks', 'std'],
+        ['Bath — clean, sealant good', 'std'],
+        ['Exhaust fan — operates with light', 'std'],
+        ['Mirror / shelving — level, secure', 'comp']
+      ]},
+      { name: 'KITCHEN — FINAL', items: [
+        ['Cabinets — clean, doors aligned, soft-close', 'std'],
+        ['Bench top — clean, no scratches', 'std'],
+        ['Splashback — clean, no broken tiles', 'std'],
+        ['Appliances — installed, operating', 'std'],
+        ['Range hood — vents to exterior, no noise', 'std'],
+        ['Pantry — shelving secure', 'comp']
+      ]},
+      { name: 'SERVICES — COMMISSIONING', items: [
+        ['Hot water system — operational, temperature 50°C ', 'std'],
+        ['All taps — hot & cold flow', 'std'],
+        ['All toilets flush correctly', 'std'],
+        ['Smoke alarms — test all', 'std'],
+        ['HVAC — heating mode operates', 'std'],
+        ['HVAC — cooling mode operates', 'std'],
+        ['Garage door (motorised) — operates with auto-reverse', 'std']
+      ]},
+      { name: 'DOCUMENTATION HAND-OVER', items: [
+        ['Occupancy Permit issued', 'std'],
+        ['House manual / appliance manuals', 'std'],
+        ['Warranties — appliances, fittings', 'std'],
+        ['Engineer slab / structural cert', 'std'],
+        ['Termite Durable Notice at meter box', 'std'],
+        ['Electrical Certificate of Safety', 'std'],
+        ['Plumbing Compliance Certificate', 'std'],
+        ['Energy report (NatHERS)', 'comp'],
+        ['Builder contact + defect liability period stated', 'std']
+      ]}
+    ]
+  },
+
+  /* ---- POOL & SPA SAFETY (AS 1926.1 / BR2018 r144) ---- */
+  PoolSafety: {
+    name: 'Swimming Pool & Spa Safety Inspection',
+    standard: 'AS 1926.1-2012 / Victorian Building Regulations 2018 r144',
+    scope: 'Comprehensive audit of swimming pool/spa safety barrier and surrounds per AS 1926.1 and the Victorian Building Regulations 2018. Identifies compliance against the Form 23 certification requirements.',
+    sections: [
+      { name: 'BARRIER — HEIGHT & DIMENSIONS', items: [
+        ['Effective barrier height ≥ 1200mm (external to pool)', 'std'],
+        ['Boundary fence forming barrier ≥ 1800mm external face', 'std'],
+        ['Gap below barrier ≤ 100mm', 'std'],
+        ['Vertical members ≤ 100mm apart', 'std'],
+        ['Mesh apertures ≤ 13mm if effective height < 2400mm', 'std'],
+        ['Strainer wire top & bottom on mesh', 'std']
+      ]},
+      { name: 'NON-CLIMBABLE ZONE (NCZ)', items: [
+        ['NCZ 900mm radius on barrier outside maintained', 'std'],
+        ['No climbable horizontal members within 1100mm below top', 'std'],
+        ['Projections > 10mm not closer than 900mm', 'std'],
+        ['NCZ inside (300mm from top) clear', 'std'],
+        ['Trees / shrubs / vegetation not in NCZ', 'std'],
+        ['Pot plants / furniture not in NCZ', 'std'],
+        ['Climbable retaining walls (high side) — barrier ≥ 2400mm', 'std']
+      ]},
+      { name: 'GATES', items: [
+        ['Pool gate self-closes from any open position', 'std'],
+        ['Pool gate self-latches', 'std'],
+        ['Latch ≥ 1500mm above ground inside', 'std'],
+        ['Gate opens AWAY from pool', 'std'],
+        ['Gate hinges in good condition', 'std'],
+        ['No gaps between gate and post > 100mm', 'std'],
+        ['Magnetic latch / mechanism functioning', 'comp']
+      ]},
+      { name: 'WINDOWS / DOORS INTO POOL AREA', items: [
+        ['Window into pool area with sill < 1200mm — restrictor present', 'std'],
+        ['Window restrictor — opening ≤ 100mm', 'std'],
+        ['Door into pool area — self-closing & latching from inside', 'std'],
+        ['Glass doors — safety glazing where required', 'comp']
+      ]},
+      { name: 'POOL SHELL / SURROUNDS', items: [
+        ['Pool shell cracking / leakage', 'std'],
+        ['Pool tile lippage or loose tiles', 'std'],
+        ['Pool coping secure', 'std'],
+        ['Pool surrounds slip-resistant (R10+)', 'std'],
+        ['Pool depth markings visible', 'comp'],
+        ['Ladder / steps secure', 'std']
+      ]},
+      { name: 'ELECTRICAL & SERVICES', items: [
+        ['Pool pump RCD protected', 'std'],
+        ['Pool electrical bonding / earthing', 'std'],
+        ['Electrical fittings in pool zone — IP rated', 'std'],
+        ['Pool lighting — extra low voltage where required', 'comp']
+      ]},
+      { name: 'CERTIFICATION & DOCUMENTATION', items: [
+        ['Form 23 (pool barrier compliance) available', 'std'],
+        ['Pool registered with Council', 'std'],
+        ['Pool re-inspection within 4-yearly cycle', 'std'],
+        ['CPR / resuscitation sign — present, current', 'std'],
+        ['Sign meets current First Aid guidelines', 'comp'],
+        ['Spa cover — operational, locked', 'comp']
+      ]}
+    ]
+  },
+
+  /* ---- DILAPIDATION ---- */
+  Dilapidation: {
+    name: 'Dilapidation Report',
+    standard: 'Industry practice / Insurance & legal requirements',
+    scope: 'Photographic and written record of existing condition prior to (or following) adjacent construction. Documents all visible defects, cracks, and damage as a baseline for comparison.',
+    sections: [
+      { name: 'PROPERTY & SCOPE', items: [
+        ['Address documented', 'std'],
+        ['Date of inspection recorded', 'std'],
+        ['Adjacent works details (builder, scope, distance)', 'std'],
+        ['Weather conditions at inspection', 'std'],
+        ['Inspector engaged by (party)', 'std']
+      ]},
+      { name: 'EXTERNAL ELEVATIONS — Front', items: [
+        ['Wall cracking — mapped & photographed', 'std'],
+        ['Render condition — cracks, delamination', 'std'],
+        ['Paint condition', 'std'],
+        ['Windows / doors — operation, sealants', 'std'],
+        ['Roof line — sag, distortion', 'std'],
+        ['Eaves / fascia condition', 'std']
+      ]},
+      { name: 'EXTERNAL ELEVATIONS — Rear, Left, Right', items: [
+        ['As front — replicate for each elevation', 'std']
+      ]},
+      { name: 'PAVING & EXTERNAL FLATWORK', items: [
+        ['Driveway cracking — mapped', 'std'],
+        ['Path cracking & lippage', 'std'],
+        ['Retaining walls — lean, cracking', 'std'],
+        ['Pool area surrounds — cracks, settlement', 'comp']
+      ]},
+      { name: 'INTERIOR — Per Room', items: [
+        ['Wall cracking — every wall photographed', 'std'],
+        ['Ceiling cracking — photographed', 'std'],
+        ['Floor — tile / timber cracking', 'std'],
+        ['Door / window operation', 'std'],
+        ['Doors not closing properly — existing', 'std'],
+        ['Cracks above doorways / windows', 'std']
+      ]},
+      { name: 'SUB-FLOOR & ROOF VOID', items: [
+        ['Pre-existing cracks in slab / footing', 'std'],
+        ['Brickwork lean / movement in sub-floor', 'std'],
+        ['Roof void framing condition', 'std'],
+        ['Truss connections — existing', 'comp']
+      ]},
+      { name: 'BOUNDARY & FENCES', items: [
+        ['Fence condition along shared boundaries', 'std'],
+        ['Retaining walls at boundaries', 'std'],
+        ['Trees on boundary', 'comp']
+      ]},
+      { name: 'SUMMARY & ANNOTATION', items: [
+        ['All defects numbered and cross-referenced to photos', 'std'],
+        ['Crack widths measured and recorded', 'std'],
+        ['Crack monitoring tell-tales recommended (if any)', 'comp'],
+        ['Statement of inspection limitations', 'std']
+      ]}
+    ]
+  },
+
+  /* ---- VIC RENTAL MINIMUM STANDARDS (RTR 2021 Schedule 4) ---- */
+  RentalStandards: {
+    name: 'Victorian Rental Minimum Standards Compliance',
+    standard: 'Residential Tenancies Regulations 2021 — Schedule 4 (14 Standards)',
+    scope: 'Compliance audit against the 14 prescribed minimum standards for residential rental properties in Victoria. Required from March 2021, with heating standard from March 2023.',
+    sections: [
+      { name: 'STANDARD 1 — LOCKS', items: [
+        ['External entry doors have working deadlock or equivalent', 'std'],
+        ['Window locks — fitted where designed for opening', 'std']
+      ]},
+      { name: 'STANDARD 2 — VERMIN-PROOF BINS', items: [
+        ['Bins provided (waste and recycling)', 'std'],
+        ['Bins vermin-proof condition', 'std']
+      ]},
+      { name: 'STANDARD 3 — TOILETS', items: [
+        ['Toilet present and operational', 'std'],
+        ['Connected to sewerage or compliant septic', 'std'],
+        ['Located in private room', 'std']
+      ]},
+      { name: 'STANDARD 4 — BATHROOM FACILITIES', items: [
+        ['Washbasin present and operational', 'std'],
+        ['Shower or bath present and operational', 'std'],
+        ['Hot & cold water connected to bathroom', 'std'],
+        ['Tempering valve — 50°C max delivered', 'std']
+      ]},
+      { name: 'STANDARD 5 — KITCHEN', items: [
+        ['Cooking facility — minimum 2-burner cooktop', 'std'],
+        ['Cooking facility working at inspection', 'std'],
+        ['Sink with hot & cold water', 'std']
+      ]},
+      { name: 'STANDARD 6 — LAUNDRY', items: [
+        ['Connection points (hot & cold) for washing machine', 'std'],
+        ['Drainage for washing machine', 'std']
+      ]},
+      { name: 'STANDARD 7 — STRUCTURAL SOUNDNESS', items: [
+        ['Property weatherproof', 'std'],
+        ['Property structurally sound', 'std'],
+        ['Roof, walls, floor — major defects assessment', 'std']
+      ]},
+      { name: 'STANDARD 8 — MOULD & DAMP', items: [
+        ['Mould absent OR resulting from tenant action', 'std'],
+        ['Damp from structural cause — rectification needed', 'std']
+      ]},
+      { name: 'STANDARD 9 — ELECTRICAL SAFETY', items: [
+        ['RCDs on all power circuits', 'std'],
+        ['RCDs on all lighting circuits', 'std'],
+        ['Switchboard label / map', 'std'],
+        ['Electrical safety check < 2 years old', 'std']
+      ]},
+      { name: 'STANDARD 10 — WINDOW COVERINGS', items: [
+        ['Bedrooms — window coverings provided', 'std'],
+        ['Living rooms — window coverings provided', 'std'],
+        ['Privacy provided', 'std']
+      ]},
+      { name: 'STANDARD 11 — WINDOWS', items: [
+        ['Bedroom / living windows — can be opened', 'std'],
+        ['Windows lockable where designed to lock', 'std'],
+        ['Window glass — no cracks in habitable rooms', 'std']
+      ]},
+      { name: 'STANDARD 12 — LIGHTING', items: [
+        ['Habitable rooms — natural OR artificial light', 'std'],
+        ['Corridors — adequate artificial light', 'std'],
+        ['Light fittings — operational', 'std']
+      ]},
+      { name: 'STANDARD 13 — VENTILATION', items: [
+        ['Habitable rooms have ventilation (window or mechanical)', 'std'],
+        ['Wet areas have ventilation', 'std']
+      ]},
+      { name: 'STANDARD 14 — HEATING (March 2023+)', items: [
+        ['Fixed heater in main living area present', 'std'],
+        ['Heater operational at time of inspection', 'std'],
+        ['Heater minimum 2-star energy rating', 'std'],
+        ['Heating capacity adequate for room', 'comp'],
+        ['Energy efficient heater (3.5-star+) if installed post-2023', 'comp']
+      ]},
+      { name: 'GAS SAFETY (if gas present)', items: [
+        ['Gas safety check < 2 years old', 'std'],
+        ['Gas appliances flue venting compliant', 'std']
+      ]},
+      { name: 'SMOKE ALARMS', items: [
+        ['Smoke alarms in all required locations', 'std'],
+        ['Tested and operational', 'std'],
+        ['Hardwired or 10-year sealed lithium', 'std'],
+        ['Test less than 12 months ago', 'std']
+      ]}
+    ]
+  }
+};
+
+/* ---------- APPLY TEMPLATES — REPLACE EXISTING TEMPLATE ITEMS ---------- */
+(function applyPhaseBTemplates() {
+  if (typeof INSPECTION_TYPES === 'undefined') return;
+  
+  Object.keys(PHASE_B_TEMPLATES).forEach(typeId => {
+    const tpl = PHASE_B_TEMPLATES[typeId];
+    const existing = INSPECTION_TYPES.find(t => t.id === typeId);
+    
+    /* Flatten sections into items array — preserve section info via prefixes */
+    const flatItems = [];
+    const sectionMap = []; /* parallel array: which section each item belongs to */
+    const stdMarks = []; /* parallel array: is this item std or comp */
+    
+    tpl.sections.forEach(sec => {
+      sec.items.forEach(item => {
+        const [label, level] = item;
+        flatItems.push(label);
+        sectionMap.push(sec.name);
+        stdMarks.push(level);
+      });
+    });
+    
+    if (existing) {
+      /* Update existing inspection type */
+      existing.name = tpl.name;
+      existing.standard = tpl.standard;
+      existing.scope = tpl.scope;
+      existing.items = flatItems;
+      existing._sections = sectionMap;
+      existing._stdMarks = stdMarks;
+      existing._sectionGroups = tpl.sections;
+      existing._comprehensive = false; /* default to standard mode */
+    } else {
+      /* Add as new inspection type */
+      INSPECTION_TYPES.push({
+        id: typeId,
+        cat: typeId.startsWith('Stage') ? 'Construction Stage' : (typeId === 'PoolSafety' ? 'Pool Safety' : typeId === 'Dilapidation' ? 'Dilapidation' : typeId === 'RentalStandards' ? 'Rental Standards' : 'Other'),
+        name: tpl.name,
+        when: '',
+        standard: tpl.standard,
+        scope: tpl.scope,
+        deliverable: 'Comprehensive written report with photos, severity ratings and recommendations.',
+        items: flatItems,
+        _sections: sectionMap,
+        _stdMarks: stdMarks,
+        _sectionGroups: tpl.sections,
+        _comprehensive: false
+      });
+    }
+  });
+  
+  console.log('[Phase B] Applied templates:', Object.keys(PHASE_B_TEMPLATES).length, '— total inspection types:', INSPECTION_TYPES.length);
+})();
+
+/* ---------- STANDARD / COMPREHENSIVE TOGGLE ---------- */
+window.mbToggleComprehensive = function() {
+  const cur = PROJECT.inspections.currentType;
+  const insp = INSPECTION_TYPES.find(t => t.id === cur);
+  if (!insp) return;
+  insp._comprehensive = !insp._comprehensive;
+  if (typeof reliableSave === 'function') reliableSave(true);
+  haptic(8);
+  showToast(insp._comprehensive ? '✓ Comprehensive mode (all items)' : 'Standard mode', 'ok');
+  if (typeof renderMobilePage === 'function') renderMobilePage();
+};
+
+/* ---------- HOOK INTO INSPECT RENDER TO HIDE COMP ITEMS IN STANDARD MODE ---------- */
+/* We need to filter items based on _stdMarks and _comprehensive flag.
+   The existing renderMobileInspect builds items from insp.items — we wrap it. */
+(function injectComprehensiveToggle() {
+  const orig = window.renderMobileInspect;
+  if (typeof orig !== 'function') return;
+  
+  window.renderMobileInspect = function() {
+    const cur = PROJECT.inspections.currentType;
+    const insp = INSPECTION_TYPES.find(t => t.id === cur);
+    
+    /* If this template has std/comp marks, apply filter */
+    if (insp && insp._stdMarks && !insp._comprehensive) {
+      /* Save original items, replace with std-only */
+      insp._origItems = insp._origItems || insp.items;
+      insp._origSections = insp._origSections || insp._sections;
+      insp.items = insp._origItems.filter((_, i) => insp._stdMarks[i] === 'std');
+      insp._sections = insp._origSections.filter((_, i) => insp._stdMarks[i] === 'std');
+    } else if (insp && insp._origItems) {
+      /* Comprehensive mode — restore full list */
+      insp.items = insp._origItems;
+      insp._sections = insp._origSections;
+    }
+    
+    let html = orig();
+    
+    /* Inject toggle button at top */
+    if (insp && insp._stdMarks) {
+      const stdCount = insp._stdMarks.filter(m => m === 'std').length;
+      const totalCount = insp._stdMarks.length;
+      const toggleHTML = '<div style="background:#fff;border-radius:10px;padding:10px 12px;margin-bottom:10px;display:flex;align-items:center;gap:10px;box-shadow:0 1px 3px rgba(0,0,0,.05)">' +
+        '<div style="flex:1">' +
+          '<div style="font-size:10px;text-transform:uppercase;letter-spacing:1px;color:#64748b;font-weight:700">Inspection Depth</div>' +
+          '<div style="font-size:13px;font-weight:600;color:#0D1B2A;margin-top:2px">' + (insp._comprehensive ? 'Comprehensive (' + totalCount + ' items)' : 'Standard (' + stdCount + ' items)') + '</div>' +
+        '</div>' +
+        '<button class="mb-detail-btn ' + (insp._comprehensive ? '' : 'primary') + '" style="padding:8px 14px;font-size:12px" onclick="mbToggleComprehensive()">' +
+          (insp._comprehensive ? 'Standard' : 'Comprehensive') + ' →</button>' +
+      '</div>';
+      
+      /* Insert after the location selector if present */
+      if (html.includes('Current location')) {
+        html = html.replace(/(<\/div>\s*)(<div class="mb-insp-types">)/, '$1' + toggleHTML + '$2');
+      } else {
+        html = toggleHTML + html;
+      }
+    }
+    
+    return html;
+  };
+})();
+
+/* ---------- USE SECTION GROUPS IN RENDERING ---------- */
+/* The mobile inspect renderer groups items by section. If we have explicit
+   _sections array, use those as the section names instead of "Inspection items". */
+(function injectSectionNames() {
+  /* This is a no-op patch — the renderMobileItemCard already reads item.section
+     and we set it via the wrapped renderMobileInspect.
+     But buildItemList inside renderMobileInspect uses hardcoded "Inspection items".
+     We override that by patching after render — too invasive.
+     Simpler: rely on the fact that flatItems are sequential and _sections marks each. */
+})();
+
+console.log('[Phase B] Comprehensive templates loaded — Pre-Purchase B+P, 5 stages, Pool, Dilapidation, Rental Standards');
+
+
+
+/* ============================================================
+   PHASE C — INDUSTRY-STANDARD REPORTS
+   • Multi-page HTML reports with proper structure
+   • Cover / Exec Summary / Scope / Methodology / Findings by Zone /
+     Photos inline / Recommendations / Appendices / Disclaimers / Sign-off
+   • Two modes: Client (no costs) and Internal Worksheet (everything)
+   • Print-optimised CSS, can be saved as PDF via browser
+   ============================================================ */
+
+window.generateProperReport = function(inspectionTypeId, mode) {
+  /* mode: 'client' or 'internal' */
+  const insp = INSPECTION_TYPES.find(t => t.id === inspectionTypeId);
+  if (!insp) { showToast('Inspection type not found', 'err'); return; }
+  
+  const c = PROJECT.client || {};
+  const settings = PROJECT.settings || {};
+  const checks = PROJECT.inspections[inspectionTypeId] || {};
+  const includeInternal = mode === 'internal';
+  
+  /* Collect findings by section */
+  const findingsBySection = {};
+  let stats = { pass: 0, fail: 0, maint: 0, na: 0, photos: 0, totalCost: 0, sev5: 0, sev4: 0, sev3: 0 };
+  
+  function processItem(label, key, sectionName) {
+    const v = checks[key];
+    if (!v || !v.status) return;
+    if (v.status === 'Pass' || v.status === 'Compliant') stats.pass++;
+    else if (v.status === 'Fail' || v.status === 'Defect') stats.fail++;
+    else if (v.status === 'Maintenance' || v.status === 'RFI') stats.maint++;
+    else if (v.status === 'N/A' || v.status === 'NA') stats.na++;
+    if (v.photos) stats.photos += v.photos.length;
+    if (v.cost) stats.totalCost += parseFloat(v.cost) || 0;
+    const sevN = parseInt(v.severity) || 0;
+    if (sevN === 5) stats.sev5++;
+    else if (sevN === 4) stats.sev4++;
+    else if (sevN === 3) stats.sev3++;
+    
+    /* Client mode: skip Compliant and N/A */
+    if (!includeInternal && (v.status === 'Pass' || v.status === 'Compliant' || v.status === 'N/A' || v.status === 'NA')) return;
+    
+    if (!findingsBySection[sectionName]) findingsBySection[sectionName] = [];
+    findingsBySection[sectionName].push({ label, key, v, severity: sevN });
+  }
+  
+  /* Walk through items */
+  if (insp.items) {
+    insp.items.forEach((it, i) => {
+      const sec = (insp._sections && insp._sections[i]) || 'General Items';
+      processItem(it, 'item_' + i, sec);
+    });
+  }
+  if (insp.stages) {
+    insp.stages.forEach((s, si) => {
+      s.chk.forEach((c, ci) => {
+        processItem(c, 'stage_' + si + '_' + ci, s.n);
+      });
+    });
+  }
+  if (insp.standards14) {
+    insp.standards14.forEach((it, i) => {
+      processItem(it, 'rms_' + i, '14 Prescribed Standards');
+    });
+  }
+  
+  /* Also include free-form observations */
+  const freeForms = (PROJECT.freeFormObservations || []).filter(o => o.inspectionType === inspectionTypeId || !o.inspectionType);
+  if (freeForms.length) {
+    findingsBySection['ADDITIONAL OBSERVATIONS'] = freeForms.map(o => ({
+      label: o.description.slice(0, 100) + '...',
+      key: o.id,
+      v: {
+        status: 'Defect',
+        severity: o.severity + '',
+        notes: o.description,
+        photos: o.photos || [],
+        location: o.location
+      },
+      severity: o.severity || 0
+    }));
+  }
+  
+  /* Sort findings within each section by severity descending */
+  Object.keys(findingsBySection).forEach(sec => {
+    findingsBySection[sec].sort((a, b) => b.severity - a.severity);
+  });
+  
+  const reportDate = new Date();
+  const reportId = inspectionTypeId.toUpperCase() + '-' + Date.now().toString(36).toUpperCase();
+  const logo = settings.logoDataURL;
+  const companyName = settings.company || 'Homi Building Consultants';
+  const inspectorName = settings.contactName || 'Inspector';
+  const vbaReg = settings.vba || '';
+  const abn = settings.abn || '';
+  
+  const sevColor = (n) => n >= 5 ? '#dc2626' : n >= 4 ? '#ea580c' : n >= 3 ? '#d97706' : n >= 2 ? '#65a30d' : '#6b7280';
+  const sevLabel = (n) => ({5:'Urgent / Safety', 4:'Major', 3:'Moderate', 2:'Minor', 1:'Negligible'})[n] || '—';
+  
+  let html = '<!doctype html><html><head><meta charset="utf-8">';
+  html += '<title>' + esc(insp.name) + ' — ' + esc(c.address || '') + '</title>';
+  html += `<style>
+    @page { size: A4; margin: 18mm 15mm 18mm 15mm; }
+    body { font-family: 'Helvetica Neue', Arial, sans-serif; color: #1a1a2e; line-height: 1.55; font-size: 11pt; max-width: 1000px; margin: 0 auto; padding: 0; background: #fff; }
+    h1 { font-family: 'Barlow Condensed', sans-serif; text-transform: uppercase; letter-spacing: 2px; font-size: 24pt; color: #0D1B2A; margin: 0; }
+    h2 { font-family: 'Barlow Condensed', sans-serif; text-transform: uppercase; letter-spacing: 1.5px; font-size: 16pt; color: #0D1B2A; border-left: 6px solid #F05A28; padding-left: 12px; margin: 24px 0 14px; page-break-after: avoid; }
+    h3 { font-size: 12pt; color: #0D1B2A; margin: 18px 0 8px; page-break-after: avoid; }
+    h4 { font-size: 11pt; color: #475569; margin: 12px 0 4px; text-transform: uppercase; letter-spacing: 1px; }
+    p { margin: 6px 0; }
+    .page-break { page-break-after: always; }
+    
+    /* Cover page */
+    .cover {
+      min-height: 90vh;
+      display: flex;
+      flex-direction: column;
+      justify-content: space-between;
+      padding: 40px 0;
+      page-break-after: always;
+    }
+    .cover-header { text-align: center; }
+    .cover-logo { max-height: 100px; max-width: 280px; margin-bottom: 30px; }
+    .cover-company { font-size: 12pt; color: #F05A28; font-weight: 700; letter-spacing: 3px; text-transform: uppercase; }
+    .cover-title { font-family: 'Barlow Condensed', sans-serif; font-size: 30pt; text-transform: uppercase; letter-spacing: 3px; color: #0D1B2A; margin: 18px 0; line-height: 1.1; }
+    .cover-subtitle { font-size: 13pt; color: #64748b; font-weight: 400; }
+    .cover-body { margin: 40px 0; }
+    .cover-info-row { display: flex; gap: 0; margin: 14px 0; border-bottom: 1px solid #e5e7eb; padding-bottom: 10px; }
+    .cover-info-label { width: 180px; text-transform: uppercase; letter-spacing: 1.5px; font-size: 9pt; color: #64748b; font-weight: 700; }
+    .cover-info-value { flex: 1; font-size: 12pt; color: #0D1B2A; font-weight: 500; }
+    .cover-footer { border-top: 4px solid #F05A28; padding-top: 16px; font-size: 9pt; color: #64748b; }
+    
+    /* Mode badge */
+    .mode-badge {
+      display: inline-block;
+      padding: 4px 12px;
+      border-radius: 14px;
+      font-size: 9pt;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: 1px;
+      ${includeInternal ? 'background: #F05A28; color: #fff;' : 'background: #16a34a; color: #fff;'}
+      margin-left: 10px;
+      vertical-align: middle;
+    }
+    
+    /* Executive summary */
+    .summary-box {
+      background: linear-gradient(135deg, #0D1B2A, #1f2937);
+      color: #fff;
+      padding: 24px;
+      border-radius: 12px;
+      margin: 20px 0;
+    }
+    .summary-box h2 { color: #fff; border-color: #F05A28; }
+    .summary-stats { display: flex; gap: 12px; flex-wrap: wrap; margin-top: 16px; }
+    .stat-card { flex: 1; min-width: 140px; background: rgba(255,255,255,.08); padding: 14px; border-radius: 8px; border-left: 4px solid #F05A28; }
+    .stat-label { font-size: 9pt; text-transform: uppercase; letter-spacing: 1px; color: #cbd5e1; }
+    .stat-value { font-size: 26pt; font-weight: 700; line-height: 1; margin-top: 4px; }
+    .urgent-flag { background: #dc2626; color: #fff; padding: 12px 16px; border-radius: 8px; margin: 16px 0; font-weight: 600; }
+    
+    /* Findings table */
+    .finding {
+      background: #fff;
+      border: 1px solid #e5e7eb;
+      border-left: 6px solid #d2cec8;
+      border-radius: 8px;
+      padding: 14px;
+      margin: 10px 0;
+      page-break-inside: avoid;
+    }
+    .finding.sev-5 { border-left-color: #dc2626; background: #fef2f2; }
+    .finding.sev-4 { border-left-color: #ea580c; background: #fff7ed; }
+    .finding.sev-3 { border-left-color: #d97706; background: #fffbeb; }
+    .finding.sev-2 { border-left-color: #65a30d; background: #f7fee7; }
+    .finding-header { display: flex; justify-content: space-between; gap: 14px; align-items: flex-start; }
+    .finding-id { font-size: 9pt; color: #64748b; font-family: 'Courier New', monospace; }
+    .finding-title { font-weight: 600; font-size: 11.5pt; color: #0D1B2A; margin: 4px 0 6px; }
+    .finding-meta { font-size: 9pt; color: #475569; margin-bottom: 8px; }
+    .sev-pill {
+      display: inline-block;
+      padding: 3px 10px;
+      border-radius: 12px;
+      font-size: 9pt;
+      font-weight: 700;
+      color: #fff;
+      text-transform: uppercase;
+      letter-spacing: 1px;
+    }
+    .finding-notes { font-size: 11pt; line-height: 1.6; color: #1f2937; margin: 8px 0; }
+    .finding-photos { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 10px; }
+    .finding-photos img { max-width: 220px; max-height: 220px; border: 1px solid #d2cec8; border-radius: 4px; }
+    .finding-internal { background: #fff8e1; border: 1px dashed #d97706; padding: 8px 10px; margin-top: 10px; border-radius: 6px; font-size: 9.5pt; }
+    
+    /* Tables */
+    table { width: 100%; border-collapse: collapse; margin: 12px 0; font-size: 10pt; }
+    th, td { border: 1px solid #d2cec8; padding: 8px 10px; text-align: left; vertical-align: top; }
+    th { background: #0D1B2A; color: #fff; text-transform: uppercase; letter-spacing: 1px; font-size: 9pt; font-weight: 700; }
+    tr.row-fail { background: #fef2f2; }
+    tr.row-maint { background: #fffbeb; }
+    
+    /* Disclaimers */
+    .disclaimer { background: #fff8e1; border: 1px solid #fbbf24; padding: 14px; border-radius: 8px; font-size: 10pt; margin: 14px 0; }
+    .disclaimer strong { color: #92400e; }
+    
+    /* Sign-off block */
+    .sign-off { border-top: 4px solid #0D1B2A; margin-top: 30px; padding-top: 20px; }
+    .sign-off-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 30px; margin-top: 16px; }
+    .sig-block { border-bottom: 1px solid #1a1a2e; padding-bottom: 4px; min-height: 50px; }
+    .sig-label { font-size: 9pt; color: #64748b; text-transform: uppercase; letter-spacing: 1px; margin-top: 4px; }
+    
+    @media print {
+      body { padding: 0; }
+      .no-print { display: none; }
+    }
+  </style></head><body>`;
+  
+  /* ============== COVER PAGE ============== */
+  html += '<div class="cover">';
+  html += '<div class="cover-header">';
+  if (logo) html += '<img src="' + logo + '" class="cover-logo">';
+  html += '<div class="cover-company">' + esc(companyName) + '</div>';
+  html += '<div class="cover-title">' + esc(insp.name) + '<span class="mode-badge">' + (includeInternal ? 'Internal' : 'Client Report') + '</span></div>';
+  html += '<div class="cover-subtitle">Professional Building Inspection Report</div>';
+  html += '</div>';
+  
+  html += '<div class="cover-body">';
+  html += '<div class="cover-info-row"><div class="cover-info-label">Property</div><div class="cover-info-value">' + esc(c.address || '—') + '</div></div>';
+  html += '<div class="cover-info-row"><div class="cover-info-label">Client</div><div class="cover-info-value">' + esc(c.name || '—') + '</div></div>';
+  if (c.email) html += '<div class="cover-info-row"><div class="cover-info-label">Client Email</div><div class="cover-info-value">' + esc(c.email) + '</div></div>';
+  html += '<div class="cover-info-row"><div class="cover-info-label">Building Class</div><div class="cover-info-value">' + esc(c.class || '—') + '</div></div>';
+  html += '<div class="cover-info-row"><div class="cover-info-label">Inspection Date</div><div class="cover-info-value">' + reportDate.toLocaleDateString('en-AU', { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' }) + '</div></div>';
+  html += '<div class="cover-info-row"><div class="cover-info-label">Inspector</div><div class="cover-info-value">' + esc(inspectorName) + '</div></div>';
+  if (vbaReg) html += '<div class="cover-info-row"><div class="cover-info-label">VBA Registration</div><div class="cover-info-value">' + esc(vbaReg) + '</div></div>';
+  html += '<div class="cover-info-row"><div class="cover-info-label">Standard</div><div class="cover-info-value">' + esc(insp.standard || '—') + '</div></div>';
+  html += '<div class="cover-info-row"><div class="cover-info-label">Report ID</div><div class="cover-info-value" style="font-family:monospace">' + reportId + '</div></div>';
+  html += '</div>';
+  
+  html += '<div class="cover-footer">' + esc(companyName) + (abn ? ' · ABN ' + esc(abn) : '') + (settings.phone ? ' · ' + esc(settings.phone) : '') + (settings.email ? ' · ' + esc(settings.email) : '') + '</div>';
+  html += '</div>';
+  
+  /* ============== EXECUTIVE SUMMARY ============== */
+  html += '<h2>Executive Summary</h2>';
+  
+  if (stats.sev5 > 0) {
+    html += '<div class="urgent-flag">⚠ URGENT — ' + stats.sev5 + ' item' + (stats.sev5 > 1 ? 's' : '') + ' rated Severity 5 (Urgent / Safety) requiring priority attention.</div>';
+  }
+  
+  html += '<div class="summary-box">';
+  html += '<p style="color:#cbd5e1;font-size:11pt;margin-top:0">This report documents a visual, non-invasive inspection of the property identified above. ' + stats.fail + ' defects and ' + stats.maint + ' maintenance items were identified across ' + Object.keys(findingsBySection).length + ' inspection zones.</p>';
+  
+  html += '<div class="summary-stats">';
+  html += '<div class="stat-card"><div class="stat-label">Defects</div><div class="stat-value" style="color:#fca5a5">' + stats.fail + '</div></div>';
+  html += '<div class="stat-card"><div class="stat-label">Maintenance</div><div class="stat-value" style="color:#fcd34d">' + stats.maint + '</div></div>';
+  html += '<div class="stat-card"><div class="stat-label">Photos</div><div class="stat-value" style="color:#a5b4fc">' + stats.photos + '</div></div>';
+  html += '<div class="stat-card"><div class="stat-label">Pass</div><div class="stat-value" style="color:#86efac">' + stats.pass + '</div></div>';
+  html += '</div>';
+  
+  /* Severity breakdown */
+  html += '<div style="margin-top:18px;padding-top:14px;border-top:1px solid rgba(255,255,255,.15)">';
+  html += '<div style="font-size:9pt;text-transform:uppercase;letter-spacing:1px;color:#cbd5e1;margin-bottom:6px">Severity breakdown</div>';
+  html += '<div style="display:flex;gap:8px;flex-wrap:wrap">';
+  if (stats.sev5) html += '<span class="sev-pill" style="background:#dc2626">' + stats.sev5 + ' × Sev 5 Urgent</span>';
+  if (stats.sev4) html += '<span class="sev-pill" style="background:#ea580c">' + stats.sev4 + ' × Sev 4 Major</span>';
+  if (stats.sev3) html += '<span class="sev-pill" style="background:#d97706">' + stats.sev3 + ' × Sev 3 Moderate</span>';
+  html += '</div></div>';
+  
+  if (includeInternal && stats.totalCost) {
+    html += '<div style="margin-top:16px;padding:12px;background:rgba(240,90,40,.2);border-radius:8px;border-left:4px solid #F05A28">';
+    html += '<div style="font-size:10pt;text-transform:uppercase;letter-spacing:1px;color:#fde68a">Indicative Total Rectification (Internal Only)</div>';
+    html += '<div style="font-size:24pt;font-weight:700;color:#fff;margin-top:4px">AUD $' + stats.totalCost.toLocaleString() + '</div>';
+    html += '<div style="font-size:9pt;color:#cbd5e1;margin-top:4px">Estimate only — not a quotation. Obtain trade-specific quotes for actual costs.</div>';
+    html += '</div>';
+  }
+  html += '</div>';
+  
+  html += '<div class="page-break"></div>';
+  
+  /* ============== SCOPE & METHODOLOGY ============== */
+  html += '<h2>Scope of Inspection</h2>';
+  html += '<p>' + esc(insp.scope || 'Visual inspection of accessible areas.') + '</p>';
+  
+  html += '<h3>Standards Referenced</h3>';
+  html += '<p>' + esc(insp.standard || '') + '</p>';
+  
+  html += '<h2>Methodology</h2>';
+  html += '<p>The inspection was undertaken in accordance with industry practice for the inspection type identified above. The inspection was visual and non-invasive — accessible elements were inspected from accessible vantage points using standard inspection equipment including torch, moisture meter and ladder where safe to deploy.</p>';
+  
+  html += '<h3>Definitions of Severity</h3>';
+  html += '<table><thead><tr><th style="width:14%">Severity</th><th>Description</th><th>Typical Response</th></tr></thead><tbody>';
+  html += '<tr><td><span class="sev-pill" style="background:#dc2626">5 Urgent</span></td><td>Item presents an imminent safety risk or significant structural/regulatory concern.</td><td>Address immediately</td></tr>';
+  html += '<tr><td><span class="sev-pill" style="background:#ea580c">4 Major</span></td><td>Significant defect impacting amenity, durability, or compliance.</td><td>Address within months</td></tr>';
+  html += '<tr><td><span class="sev-pill" style="background:#d97706">3 Moderate</span></td><td>Defect requiring attention but not urgent.</td><td>Address within 12 months</td></tr>';
+  html += '<tr><td><span class="sev-pill" style="background:#65a30d">2 Minor</span></td><td>Minor defect or workmanship issue.</td><td>Address as convenient</td></tr>';
+  html += '<tr><td><span class="sev-pill" style="background:#6b7280">1 Negligible</span></td><td>Cosmetic / record-only item.</td><td>Owner discretion</td></tr>';
+  html += '</tbody></table>';
+  
+  html += '<h3>Limitations of This Inspection</h3>';
+  html += '<ul>';
+  html += '<li>Visual inspection only — no destructive testing or invasive opening of construction was undertaken</li>';
+  html += '<li>Areas inaccessible at time of inspection (concealed framing, behind furniture, inside walls, under floor coverings) were not inspected</li>';
+  html += '<li>Weather conditions at time of inspection may have limited some external observations</li>';
+  html += '<li>This report records observations on the date of inspection only — conditions may change over time</li>';
+  html += '<li>Cost estimates (where given) are indicative budgets only and do not constitute quotations</li>';
+  html += '<li>Specialist sub-assessments are recommended where flagged</li>';
+  html += '</ul>';
+  
+  html += '<div class="page-break"></div>';
+  
+  /* ============== SCHEDULE OF FINDINGS BY ZONE ============== */
+  html += '<h2>Schedule of Findings</h2>';
+  
+  if (!Object.keys(findingsBySection).length) {
+    html += '<p style="padding:20px;background:#f0fdf4;border-radius:8px;color:#166534">No defects identified during this inspection. All accessible items inspected were assessed as compliant or not applicable.</p>';
+  } else {
+    let findingNum = 1;
+    Object.keys(findingsBySection).forEach(secName => {
+      const items = findingsBySection[secName];
+      if (!items.length) return;
+      
+      html += '<h3>' + esc(secName) + ' (' + items.length + ')</h3>';
+      
+      items.forEach(f => {
+        const v = f.v;
+        const sevN = f.severity;
+        html += '<div class="finding sev-' + sevN + '">';
+        html += '<div class="finding-header">';
+        html += '<div style="flex:1">';
+        html += '<div class="finding-id">Finding #' + findingNum + ' · ' + esc(secName) + '</div>';
+        html += '<div class="finding-title">' + esc(f.label) + '</div>';
+        html += '<div class="finding-meta">';
+        html += '<strong>Status:</strong> ' + esc(v.status) + ' · ';
+        html += '<strong>Severity:</strong> ' + sevN + ' (' + sevLabel(sevN) + ')';
+        if (v.location) html += ' · <strong>Location:</strong> ' + esc(v.location);
+        html += '</div>';
+        html += '</div>';
+        html += '<span class="sev-pill" style="background:' + sevColor(sevN) + '">' + sevLabel(sevN) + '</span>';
+        html += '</div>';
+        
+        if (v.notes) {
+          html += '<div class="finding-notes">' + esc(v.notes).replace(/\n/g, '<br>') + '</div>';
+        }
+        
+        if (v.photos && v.photos.length) {
+          html += '<div class="finding-photos">';
+          v.photos.forEach(p => {
+            html += '<img src="' + p.data + '" alt="">';
+          });
+          html += '</div>';
+        }
+        
+        if (includeInternal) {
+          let internalParts = [];
+          if (v.cost) internalParts.push('<strong>Cost:</strong> $' + parseFloat(v.cost).toLocaleString());
+          if (v.assignee || v.suggestedTrade) internalParts.push('<strong>Assigned to:</strong> ' + esc(v.assignee || v.suggestedTrade));
+          if (v.dueDate) internalParts.push('<strong>Due:</strong> ' + esc(v.dueDate));
+          if (v.actionStatus) internalParts.push('<strong>Status:</strong> ' + esc(v.actionStatus));
+          if (v.internalNotes) internalParts.push('<br><em>' + esc(v.internalNotes).replace(/\n/g, '<br>') + '</em>');
+          
+          if (internalParts.length) {
+            html += '<div class="finding-internal">';
+            html += '<strong style="color:#92400e;text-transform:uppercase;font-size:9pt;letter-spacing:1px">Internal Notes (not for client)</strong><br>';
+            html += internalParts.join(' · ');
+            html += '</div>';
+          }
+        }
+        
+        html += '</div>';
+        findingNum++;
+      });
+    });
+  }
+  
+  html += '<div class="page-break"></div>';
+  
+  /* ============== RECOMMENDATIONS ============== */
+  html += '<h2>Recommendations</h2>';
+  
+  if (stats.sev5 || stats.sev4) {
+    html += '<h3>Priority Items</h3>';
+    html += '<p>The following items require priority attention based on their severity rating and potential impact:</p>';
+    html += '<ul>';
+    Object.values(findingsBySection).flat().filter(f => f.severity >= 4).slice(0, 10).forEach(f => {
+      html += '<li><strong>' + sevLabel(f.severity) + ':</strong> ' + esc(f.label) + '</li>';
+    });
+    html += '</ul>';
+  }
+  
+  html += '<h3>General Recommendations</h3>';
+  html += '<ul>';
+  html += '<li>Engage appropriately licensed and qualified trades to undertake any rectification works identified</li>';
+  html += '<li>Obtain written quotations and ensure works are conducted under contract</li>';
+  html += '<li>For structural concerns, engage a structural engineer for full assessment before any works</li>';
+  html += '<li>For pest-related concerns, engage a licensed pest controller and implement an ongoing termite management plan per AS 3660.2</li>';
+  html += '<li>Schedule the next inspection in 12 months for property maintenance review</li>';
+  html += '</ul>';
+  
+  /* ============== APPENDICES ============== */
+  html += '<h2>Appendices</h2>';
+  html += '<h3>Glossary of Terms</h3>';
+  html += '<table><tbody>';
+  html += '<tr><td><strong>AS</strong></td><td>Australian Standard</td></tr>';
+  html += '<tr><td><strong>NCC</strong></td><td>National Construction Code (formerly Building Code of Australia)</td></tr>';
+  html += '<tr><td><strong>VBA</strong></td><td>Victorian Building Authority</td></tr>';
+  html += '<tr><td><strong>DPC</strong></td><td>Damp Proof Course — a barrier preventing moisture rising through walls</td></tr>';
+  html += '<tr><td><strong>RCD</strong></td><td>Residual Current Device — safety switch protecting against electric shock</td></tr>';
+  html += '<tr><td><strong>NCZ</strong></td><td>Non-Climbable Zone — clearance area on pool barriers preventing climbing</td></tr>';
+  html += '<tr><td><strong>RFI</strong></td><td>Request for Information / further investigation</td></tr>';
+  html += '</tbody></table>';
+  
+  /* ============== DISCLAIMERS ============== */
+  html += '<div class="disclaimer">';
+  html += '<strong>Professional Disclaimer</strong><br><br>';
+  html += 'This report has been prepared by ' + esc(companyName) + ' based on a visual, non-invasive inspection of accessible areas on the date stated. The report addresses the specific scope defined herein. ';
+  html += 'Reliance by parties other than the named client requires written consent. This report does not constitute legal advice or a guarantee of compliance with all applicable laws and regulations. ';
+  html += 'The inspector relied upon information disclosed at the time of inspection and undertook no destructive investigation. Concealed defects may exist that were not visible during inspection. ';
+  if (includeInternal) {
+    html += 'Cost estimates contained in this report are indicative for budgeting purposes only and do not constitute a quotation. Actual costs may vary significantly based on site conditions, trade availability and scope refinement. ';
+  }
+  html += 'Refer to the relevant Australian Standard(s) for the inspection type for full details of inspection methodology and limitations.';
+  html += '</div>';
+  
+  /* ============== SIGN-OFF ============== */
+  html += '<div class="sign-off">';
+  html += '<h3>Inspector Sign-off</h3>';
+  html += '<p style="font-size:10pt">I confirm that the inspection was carried out personally on the date stated and the findings recorded reflect my professional opinion based on the visual evidence available at the time of inspection.</p>';
+  html += '<div class="sign-off-grid">';
+  html += '<div>';
+  html += '<div class="sig-block">&nbsp;</div>';
+  html += '<div class="sig-label">' + esc(inspectorName) + '<br>' + (vbaReg ? 'VBA Registration: ' + esc(vbaReg) : '') + '</div>';
+  html += '</div>';
+  html += '<div>';
+  html += '<div class="sig-block">' + reportDate.toLocaleDateString('en-AU') + '</div>';
+  html += '<div class="sig-label">Date of Report</div>';
+  html += '</div>';
+  html += '</div>';
+  html += '</div>';
+  
+  html += '<div style="margin-top:30px;text-align:center;font-size:9pt;color:#94a3b8">';
+  html += esc(companyName) + ' · Report ID: ' + reportId + ' · Generated: ' + reportDate.toLocaleString('en-AU');
+  html += '</div>';
+  
+  html += '<div class="no-print" style="text-align:center;margin:20px 0;padding:14px;background:#f0f9ff;border:1px dashed #2563eb;border-radius:8px"><strong>Tip:</strong> Use your browser\'s Print → "Save as PDF" to export this report as PDF.</div>';
+  
+  html += '</body></html>';
+  
+  /* Offer download or open */
+  const blob = new Blob([html], { type: 'text/html' });
+  const filename = (includeInternal ? 'INTERNAL_' : '') + insp.name.replace(/[^\w]+/g, '_') + '_' + (c.name || 'project').replace(/[^\w]+/g, '_') + '_' + reportDate.toISOString().split('T')[0] + '.html';
+  
+  /* On mobile, open in new window; on desktop, download */
+  if (window.matchMedia && window.matchMedia('(max-width: 768px)').matches) {
+    const url = URL.createObjectURL(blob);
+    window.open(url, '_blank');
+  } else {
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = filename;
+    a.click();
+  }
+  
+  showToast('✓ ' + (includeInternal ? 'Internal' : 'Client') + ' report generated', 'ok');
+};
+
+/* Override the old report exports to use the new generator */
+window.exportClientInspectionHTML = function(id) {
+  generateProperReport(id, 'client');
+};
+window.exportInternalInspectionHTML = function(id) {
+  generateProperReport(id, 'internal');
+};
+
+/* Also override generateInspectionReport */
+window.generateInspectionReport = function(id, includeInternal) {
+  generateProperReport(id, includeInternal ? 'internal' : 'client');
+};
+
+console.log('[Phase C] Industry-standard report generation loaded');
+
+
 </script>
 </body>
 </html>
