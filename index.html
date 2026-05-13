@@ -13357,6 +13357,611 @@ window.generateInspectionReport = function(id, includeInternal) {
 console.log('[Phase C] Industry-standard report generation loaded');
 
 
+
+/* ============================================================
+   PHASE D — DESKTOP BUG FIXES (V24)
+   1. Tabs no longer jump to Settings on re-render
+   2. AI Mentor uses real Claude/Gemini/OpenAI API
+   3. AI Mentor gets file upload + full assessment mode
+   4. Siting Reg 79 now shows compliant/non-compliant comparison
+   ============================================================ */
+
+/* ---------- 1. TAB PERSISTENCE FIX ---------- */
+/* Track the active tab globally and restore it after every renderPages() */
+window.CURRENT_TAB = 0;
+
+(function fixTabPersistence() {
+  if (typeof goTab !== 'function') return;
+  
+  /* Wrap goTab to remember the active tab */
+  const __origGoTab = window.goTab;
+  window.goTab = function(i) {
+    window.CURRENT_TAB = i;
+    return __origGoTab(i);
+  };
+  
+  /* Wrap renderPages to restore the active tab after re-render */
+  const __origRenderPagesTab = window.renderPages;
+  window.renderPages = function() {
+    const wasTab = window.CURRENT_TAB || 0;
+    __origRenderPagesTab.apply(this, arguments);
+    /* On desktop only: re-apply the active tab class */
+    if (typeof document !== 'undefined' && document.body && !document.body.classList.contains('mobile-mode')) {
+      requestAnimationFrame(() => {
+        document.querySelectorAll('.tab').forEach((x, n) => x.classList.toggle('active', n === wasTab));
+        document.querySelectorAll('.stage').forEach((x, n) => x.classList.toggle('active', n === wasTab));
+        document.querySelectorAll('.page').forEach((x, n) => x.classList.toggle('active', n === wasTab));
+      });
+    }
+  };
+})();
+
+/* ---------- 2. AI MENTOR — REAL API CALLS ---------- */
+/* Replace simulateMentorResponse with real API call to chosen provider.
+   Keep keyword-matching as fallback when API key missing. */
+
+window.callMentorAI = async function(userText, fullAssessment) {
+  const ai = (PROJECT.settings && PROJECT.settings.ai) || {};
+  const route = ai.routing || {};
+  const chatProviderName = route.chat || 'Claude';
+  
+  /* Map display name to provider ID */
+  const providerId = chatProviderName.toLowerCase().includes('gemini') ? 'google' :
+                     chatProviderName.toLowerCase().includes('chat') || chatProviderName.toLowerCase().includes('gpt') ? 'chatgpt' :
+                     'claude';
+  
+  const cfg = ai[providerId];
+  if (!cfg || !cfg.key) {
+    /* No API key — use keyword fallback */
+    if (typeof simulateMentorResponse === 'function') {
+      return { text: simulateMentorResponse(userText), provider: chatProviderName + ' (offline mode)' };
+    }
+    return { text: 'No API key configured for ' + chatProviderName + '. Add an API key in Settings tab → AI Providers section.', provider: 'system' };
+  }
+  
+  /* Build context-aware system prompt */
+  const c = PROJECT.client || {};
+  const trig = PROJECT.masterTrigger || {};
+  
+  let context = 'You are an expert Victorian building consultant AI mentor. The user, Raj, is a Trainee Building Surveyor working toward Building Inspector (Limited) registration in Victoria, Australia. Help them with NCC, Building Regulations 2018, AS standards, ResCode, and permit pathways.\n\n';
+  context += 'CURRENT PROJECT CONTEXT:\n';
+  context += '• Client: ' + (c.name || 'unset') + '\n';
+  context += '• Address: ' + (c.address || 'unset') + '\n';
+  context += '• Building class: ' + (c.class || 'unset') + '\n';
+  context += '• Work type: ' + (c.workType || 'unset') + '\n';
+  context += '• Council: ' + (c.council || 'unset') + '\n';
+  context += '• Zone: ' + (c.zone || 'unset') + '\n';
+  context += '• Overlays: ' + (c.overlays || 'none') + '\n';
+  context += '• Project cost: $' + (parseFloat(c.projectCost) || 0).toLocaleString() + '\n';
+  context += '• Owner-Builder: ' + (c.ownerBuilder ? 'Yes' : 'No') + '\n';
+  
+  /* Add assessment status */
+  if (PROJECT.assessments) {
+    let totalItems = 0, doneItems = 0, rfiItems = 0, noItems = 0;
+    Object.values(PROJECT.assessments).forEach(arr => {
+      arr.forEach(it => {
+        totalItems++;
+        if (it.status && it.status !== 'Pending') doneItems++;
+        if (it.status === 'RFI') rfiItems++;
+        if (it.status === 'No') noItems++;
+      });
+    });
+    context += '• Assessment progress: ' + doneItems + '/' + totalItems + ' items\n';
+    context += '• Outstanding RFIs: ' + rfiItems + '\n';
+    context += '• Non-compliant items: ' + noItems + '\n';
+  }
+  
+  context += '\n';
+  
+  if (fullAssessment) {
+    context += 'The user has requested a FULL ASSESSMENT. Provide a comprehensive, structured response covering:\n';
+    context += '1. Summary of the user\'s question or item\n';
+    context += '2. Relevant NCC clauses (Volume 1 or 2 as applicable) with clause numbers\n';
+    context += '3. Relevant Australian Standards with section references\n';
+    context += '4. Relevant Building Regulations 2018 references\n';
+    context += '5. Compliance issues identified, if any\n';
+    context += '6. Specific recommendations for the user\'s project\n';
+    context += '7. Documentation or evidence required\n';
+    context += '8. Items requiring further specialist input or RFI\n\n';
+    context += 'Format with clear section headings. Be thorough and educational — this is for learning AND project compliance.\n\n';
+  } else {
+    context += 'Respond in 2-5 sentences with relevant NCC/standards references where applicable. Use Australian English.\n\n';
+  }
+  
+  context += 'USER QUESTION:\n' + userText;
+  
+  try {
+    let result = '';
+    
+    if (providerId === 'google') {
+      const model = (cfg.model || 'gemini-2.0-flash').toLowerCase().replace(/\s+/g, '-');
+      const r = await fetch('https://generativelanguage.googleapis.com/v1beta/models/' + encodeURIComponent(model) + ':generateContent?key=' + encodeURIComponent(cfg.key), {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ contents: [{ parts: [{ text: context }] }] })
+      });
+      if (!r.ok) throw new Error('Gemini ' + r.status + ': ' + (await r.text()).slice(0, 300));
+      const data = await r.json();
+      result = data.candidates?.[0]?.content?.parts?.[0]?.text || '';
+    }
+    else if (providerId === 'claude') {
+      const modelMap = { 'Claude Sonnet': 'claude-sonnet-4-5-20250929', 'Claude Opus': 'claude-opus-4-1-20250805' };
+      const actualModel = modelMap[cfg.model] || cfg.model || 'claude-sonnet-4-5-20250929';
+      const r = await fetch('https://api.anthropic.com/v1/messages', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'x-api-key': cfg.key,
+          'anthropic-version': '2023-06-01',
+          'anthropic-dangerous-direct-browser-access': 'true'
+        },
+        body: JSON.stringify({
+          model: actualModel,
+          max_tokens: fullAssessment ? 4000 : 1500,
+          messages: [{ role: 'user', content: context }]
+        })
+      });
+      if (!r.ok) throw new Error('Claude ' + r.status + ': ' + (await r.text()).slice(0, 300));
+      const data = await r.json();
+      result = data.content?.[0]?.text || '';
+    }
+    else { /* chatgpt */
+      const modelMap = { 'GPT-5.5 Thinking': 'gpt-4o', 'GPT-4o': 'gpt-4o', 'GPT-4o mini': 'gpt-4o-mini' };
+      const actualModel = modelMap[cfg.model] || 'gpt-4o-mini';
+      const r = await fetch('https://api.openai.com/v1/chat/completions', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + cfg.key },
+        body: JSON.stringify({
+          model: actualModel,
+          max_tokens: fullAssessment ? 4000 : 1500,
+          messages: [{ role: 'user', content: context }]
+        })
+      });
+      if (!r.ok) throw new Error('OpenAI ' + r.status + ': ' + (await r.text()).slice(0, 300));
+      const data = await r.json();
+      result = data.choices?.[0]?.message?.content || '';
+    }
+    
+    return { text: result.trim(), provider: chatProviderName };
+  } catch (err) {
+    console.error('AI Mentor error:', err);
+    /* Fallback to keyword on error */
+    if (typeof simulateMentorResponse === 'function') {
+      return {
+        text: '⚠ API call failed (' + err.message + ')\n\nFalling back to keyword-matched response:\n\n' + simulateMentorResponse(userText),
+        provider: chatProviderName + ' (offline fallback)'
+      };
+    }
+    return { text: '⚠ AI call failed: ' + err.message, provider: 'error' };
+  }
+};
+
+/* ---------- 3. OVERRIDE sendChatMessage TO USE REAL AI ---------- */
+window.sendChatMessage = async function() {
+  const inp = document.getElementById('chatInput');
+  if (!inp) return;
+  const txt = (inp.value || '').trim();
+  if (!txt) return;
+  
+  PROJECT.chat = PROJECT.chat || [];
+  const isFull = !!window.__nextFullAssessment;
+  window.__nextFullAssessment = false;
+  
+  PROJECT.chat.push({ role: 'user', text: txt, ts: Date.now(), fullAssessment: isFull });
+  inp.value = '';
+  
+  /* Add a "thinking" placeholder */
+  PROJECT.chat.push({ role: 'sys', text: '🤖 Generating ' + (isFull ? 'full assessment' : 'response') + '...', ts: Date.now(), thinking: true });
+  renderPages();
+  goTab(12);
+  setTimeout(() => { const m = document.getElementById('chatMessages'); if (m) m.scrollTop = m.scrollHeight; }, 50);
+  
+  /* Call real AI */
+  try {
+    const response = await callMentorAI(txt, isFull);
+    /* Remove thinking placeholder */
+    PROJECT.chat = PROJECT.chat.filter(m => !m.thinking);
+    PROJECT.chat.push({ role: 'ai', text: response.text, provider: response.provider, ts: Date.now(), fullAssessment: isFull });
+  } catch (err) {
+    PROJECT.chat = PROJECT.chat.filter(m => !m.thinking);
+    PROJECT.chat.push({ role: 'ai', text: '⚠ Error: ' + err.message, provider: 'error', ts: Date.now() });
+  }
+  
+  renderPages();
+  goTab(12);
+  if (typeof saveProject === 'function') saveProject(true);
+  setTimeout(() => { const m = document.getElementById('chatMessages'); if (m) m.scrollTop = m.scrollHeight; }, 50);
+};
+
+/* ---------- 4. AI FILE UPLOAD + ASSESSMENT ---------- */
+window.aiUploadFile = function() {
+  const input = document.createElement('input');
+  input.type = 'file';
+  input.accept = '.pdf,.txt,.doc,.docx,.png,.jpg,.jpeg';
+  input.style.display = 'none';
+  input.onchange = async (e) => {
+    const file = e.target.files[0];
+    if (!file) return;
+    
+    PROJECT.aiUploadedFiles = PROJECT.aiUploadedFiles || [];
+    
+    const reader = new FileReader();
+    reader.onload = async (ev) => {
+      try {
+        let content = '';
+        let type = file.type;
+        
+        if (type.startsWith('text/') || file.name.endsWith('.txt')) {
+          content = ev.target.result;
+        } else if (type.startsWith('image/')) {
+          content = ev.target.result; /* base64 data URL */
+        } else {
+          /* PDF or doc — store base64, will be sent to AI */
+          content = ev.target.result;
+        }
+        
+        PROJECT.aiUploadedFiles.push({
+          name: file.name,
+          type: type,
+          size: file.size,
+          content: content,
+          uploadedAt: new Date().toISOString()
+        });
+        
+        if (typeof saveProject === 'function') saveProject(true);
+        showToast('✓ ' + file.name + ' uploaded', 'ok');
+        renderPages();
+        goTab(12);
+      } catch (err) {
+        showToast('Upload error: ' + err.message, 'err');
+      }
+    };
+    reader.onerror = () => showToast('Could not read file', 'err');
+    
+    if (file.type.startsWith('text/') || file.name.endsWith('.txt')) {
+      reader.readAsText(file);
+    } else {
+      reader.readAsDataURL(file);
+    }
+  };
+  document.body.appendChild(input);
+  input.click();
+};
+
+window.aiAssessFile = async function(idx) {
+  const f = PROJECT.aiUploadedFiles?.[idx];
+  if (!f) { showToast('File not found', 'err'); return; }
+  
+  const ai = (PROJECT.settings && PROJECT.settings.ai) || {};
+  const route = ai.routing || {};
+  const chatProviderName = route.chat || 'Claude';
+  const providerId = chatProviderName.toLowerCase().includes('gemini') ? 'google' :
+                     chatProviderName.toLowerCase().includes('chat') || chatProviderName.toLowerCase().includes('gpt') ? 'chatgpt' :
+                     'claude';
+  const cfg = ai[providerId];
+  
+  if (!cfg || !cfg.key) {
+    showToast('Configure ' + chatProviderName + ' API key in Settings first', 'err');
+    return;
+  }
+  
+  const c = PROJECT.client || {};
+  const isFull = !!window.__nextFullAssessment;
+  window.__nextFullAssessment = false;
+  
+  /* Add thinking message */
+  PROJECT.chat = PROJECT.chat || [];
+  PROJECT.chat.push({ role: 'sys', text: '🤖 Assessing ' + f.name + '...', ts: Date.now(), thinking: true });
+  renderPages();
+  goTab(12);
+  
+  const promptText = (isFull ? 'Provide a COMPREHENSIVE FULL ASSESSMENT' : 'Provide an assessment') +
+    ' of this document for a Victorian building permit application.\n\n' +
+    'Project context:\n' +
+    '• Client: ' + (c.name || 'unset') + '\n' +
+    '• Address: ' + (c.address || 'unset') + '\n' +
+    '• Class: ' + (c.class || 'unset') + '\n' +
+    '• Work type: ' + (c.workType || 'unset') + '\n' +
+    '• Council: ' + (c.council || 'unset') + '\n\n' +
+    'Assess this document for:\n' +
+    '1. Compliance with NCC (with clause references)\n' +
+    '2. Compliance with relevant Australian Standards\n' +
+    '3. Compliance with Building Regulations 2018 if applicable\n' +
+    '4. Compliance with ResCode siting if applicable\n' +
+    '5. Missing information that would trigger an RFI\n' +
+    '6. Inconsistencies or contradictions\n' +
+    '7. Specific recommendations\n' +
+    (isFull ? '8. Items requiring further specialist input\n9. Compliance gaps with proposed remediation\n10. Sample RFI wording\n' : '') +
+    '\nDocument: ' + f.name + '\n' +
+    (f.type.startsWith('text/') ? 'Content:\n' + f.content.slice(0, 5000) : '(Binary file content not shown but available)');
+  
+  try {
+    let result = '';
+    
+    if (providerId === 'claude' && f.type.startsWith('image/')) {
+      /* Claude supports image input */
+      const modelMap = { 'Claude Sonnet': 'claude-sonnet-4-5-20250929', 'Claude Opus': 'claude-opus-4-1-20250805' };
+      const actualModel = modelMap[cfg.model] || cfg.model || 'claude-sonnet-4-5-20250929';
+      /* Extract base64 from data URL */
+      const base64 = f.content.split(',')[1];
+      const r = await fetch('https://api.anthropic.com/v1/messages', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'x-api-key': cfg.key,
+          'anthropic-version': '2023-06-01',
+          'anthropic-dangerous-direct-browser-access': 'true'
+        },
+        body: JSON.stringify({
+          model: actualModel,
+          max_tokens: isFull ? 4000 : 2000,
+          messages: [{
+            role: 'user',
+            content: [
+              { type: 'image', source: { type: 'base64', media_type: f.type, data: base64 } },
+              { type: 'text', text: promptText }
+            ]
+          }]
+        })
+      });
+      if (!r.ok) throw new Error('Claude ' + r.status + ': ' + (await r.text()).slice(0, 300));
+      const data = await r.json();
+      result = data.content?.[0]?.text || '';
+    }
+    else if (providerId === 'google' && (f.type.startsWith('image/') || f.type === 'application/pdf')) {
+      /* Gemini supports image + PDF */
+      const model = (cfg.model || 'gemini-2.0-flash').toLowerCase().replace(/\s+/g, '-');
+      const base64 = f.content.split(',')[1];
+      const r = await fetch('https://generativelanguage.googleapis.com/v1beta/models/' + encodeURIComponent(model) + ':generateContent?key=' + encodeURIComponent(cfg.key), {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          contents: [{
+            parts: [
+              { inline_data: { mime_type: f.type, data: base64 } },
+              { text: promptText }
+            ]
+          }]
+        })
+      });
+      if (!r.ok) throw new Error('Gemini ' + r.status + ': ' + (await r.text()).slice(0, 300));
+      const data = await r.json();
+      result = data.candidates?.[0]?.content?.parts?.[0]?.text || '';
+    }
+    else {
+      /* Text-only fallback */
+      const response = await callMentorAI(promptText, isFull);
+      result = response.text;
+    }
+    
+    /* Remove thinking */
+    PROJECT.chat = PROJECT.chat.filter(m => !m.thinking);
+    PROJECT.chat.push({
+      role: 'ai',
+      text: '📄 Assessment of ' + f.name + (isFull ? ' (FULL)' : '') + ':\n\n' + result.trim(),
+      provider: chatProviderName,
+      ts: Date.now(),
+      fullAssessment: isFull
+    });
+    
+    if (typeof saveProject === 'function') saveProject(true);
+    renderPages();
+    goTab(12);
+    setTimeout(() => { const m = document.getElementById('chatMessages'); if (m) m.scrollTop = m.scrollHeight; }, 50);
+  } catch (err) {
+    PROJECT.chat = PROJECT.chat.filter(m => !m.thinking);
+    PROJECT.chat.push({ role: 'ai', text: '⚠ Assessment failed: ' + err.message, provider: 'error', ts: Date.now() });
+    renderPages();
+    goTab(12);
+  }
+};
+
+window.aiDeleteFile = function(idx) {
+  if (!confirm('Remove this file?')) return;
+  PROJECT.aiUploadedFiles.splice(idx, 1);
+  if (typeof saveProject === 'function') saveProject(true);
+  renderPages();
+  goTab(12);
+};
+
+window.toggleFullAssessment = function() {
+  window.__nextFullAssessment = !window.__nextFullAssessment;
+  const btn = document.getElementById('fullAssessBtn');
+  if (btn) {
+    btn.classList.toggle('primary', window.__nextFullAssessment);
+    btn.textContent = window.__nextFullAssessment ? '🔬 Full Assessment ON — next message' : '🔬 Full Assessment';
+  }
+};
+
+/* ---------- 5. ENHANCED AI MENTOR RENDER WITH FILE UPLOAD ---------- */
+/* Wrap renderAIMentor to add file upload + full assessment toggle */
+(function enhanceMentorRender() {
+  if (typeof renderAIMentor !== 'function') return;
+  const orig = window.renderAIMentor;
+  window.renderAIMentor = function() {
+    const baseCard = orig();
+    
+    /* Insert file upload + full assessment controls into the existing render */
+    const files = PROJECT.aiUploadedFiles || [];
+    let fileSection = '';
+    if (files.length) {
+      fileSection = '<h4 style="margin-top:14px">📎 Uploaded Files</h4><div style="display:flex;flex-direction:column;gap:6px">';
+      files.forEach((f, i) => {
+        const sizeKB = Math.round(f.size / 1024);
+        fileSection += '<div style="background:#f6f8fa;padding:10px 12px;border-radius:6px;display:flex;align-items:center;gap:10px;border:1px solid #e5e7eb">' +
+          '<span style="font-size:20px">📄</span>' +
+          '<div style="flex:1;min-width:0">' +
+            '<div style="font-weight:600;font-size:13px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">' + esc(f.name) + '</div>' +
+            '<div class="mini muted">' + sizeKB + ' KB · ' + esc(f.type || 'unknown') + ' · uploaded ' + new Date(f.uploadedAt).toLocaleString('en-AU') + '</div>' +
+          '</div>' +
+          '<button class="btn primary" onclick="aiAssessFile(' + i + ')">🤖 Assess</button>' +
+          '<button class="btn" onclick="aiDeleteFile(' + i + ')">✕</button>' +
+        '</div>';
+      });
+      fileSection += '</div>';
+    }
+    
+    /* Add upload + full assessment toggle */
+    const uploadSection = '<div style="margin-top:14px;padding:12px;background:#fff7ed;border-radius:8px;border-left:4px solid #F05A28">' +
+      '<h4 style="margin:0 0 8px">🔬 Advanced AI Tools</h4>' +
+      '<div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center">' +
+        '<button class="btn primary" onclick="aiUploadFile()">📎 Upload file for assessment</button>' +
+        '<button id="fullAssessBtn" class="btn ' + (window.__nextFullAssessment ? 'primary' : '') + '" onclick="toggleFullAssessment()">' + (window.__nextFullAssessment ? '🔬 Full Assessment ON — next message' : '🔬 Full Assessment') + '</button>' +
+      '</div>' +
+      '<p class="mini muted" style="margin-top:8px">Upload plans, RFI letters, NCC documents, or AS standards for AI-powered assessment. Enable Full Assessment for comprehensive multi-section reports with clause references.</p>' +
+    '</div>';
+    
+    /* Inject before closing </div> of card body */
+    return baseCard.replace(
+      /<\/div><\/div>$/,
+      uploadSection + fileSection + '</div></div>'
+    );
+  };
+})();
+
+/* ---------- 6. SITING REG 79 COMPLIANCE FIX ---------- */
+/* Override renderSiting to add Reg 79 compliance check + improve all calcs */
+(function fixSitingCompliance() {
+  if (typeof renderSiting !== 'function') return;
+  const orig = window.renderSiting;
+  
+  window.renderSiting = function() {
+    const sit = PROJECT.siting || (PROJECT.siting = {});
+    
+    /* Recalc all values */
+    const wallH = parseFloat(sit.wallHeight) || 0;
+    const reg79Required = (typeof calcReg79 === 'function') ? calcReg79(wallH) : 1.0;
+    const reg79Proposed = parseFloat(sit.proposedSetback) || 0;
+    /* Compliance: proposed >= required */
+    const reg79OK = reg79Proposed > 0 && reg79Proposed >= reg79Required;
+    const reg79Status = !reg79Proposed ? '— (enter proposed value)' :
+                        reg79OK ? '✓ COMPLIANT' : '✗ NON-COMPLIANT (' + (reg79Required - reg79Proposed).toFixed(2) + ' m short)';
+    const reg79Color = !reg79Proposed ? '#f6f8fa' : reg79OK ? '#dcfce7' : '#fee2e2';
+    const reg79TextColor = !reg79Proposed ? '#475569' : reg79OK ? '#166534' : '#991b1b';
+    
+    const boundaryLen = parseFloat(sit.boundaryLength) || 0;
+    const wallOnBoundary = parseFloat(sit.wallOnBoundary) || 0;
+    const reg80Max = 10 + (boundaryLen - 10) * 0.25;
+    const reg80OK = wallOnBoundary > 0 && wallOnBoundary <= reg80Max;
+    const reg80Status = !wallOnBoundary ? '— (enter proposed value)' :
+                        reg80OK ? '✓ COMPLIANT' : '✗ NON-COMPLIANT (' + (wallOnBoundary - reg80Max).toFixed(2) + ' m over)';
+    const reg80Color = !wallOnBoundary ? '#f6f8fa' : reg80OK ? '#dcfce7' : '#fee2e2';
+    
+    const winH = parseFloat(sit.windowAFFL) || 0;
+    const winDist = parseFloat(sit.windowDistance) || 0;
+    const reg84Triggers = winH > 0.8 && winDist < 9 && winDist > 0;
+    
+    const posArea = parseFloat(sit.posArea) || 0;
+    const posDim = parseFloat(sit.posMinDim) || 0;
+    const reg86OK = posArea >= 80 && posDim >= 3;
+    const reg86Status = (!posArea && !posDim) ? '— (enter values)' :
+                        reg86OK ? '✓ COMPLIANT' : '✗ NON-COMPLIANT' + 
+                          (posArea < 80 ? ' (area ' + (80 - posArea).toFixed(0) + ' m² short)' : '') +
+                          (posDim < 3 ? ' (dim ' + (3 - posDim).toFixed(1) + ' m short)' : '');
+    const reg86Color = (!posArea && !posDim) ? '#f6f8fa' : reg86OK ? '#dcfce7' : '#fee2e2';
+    
+    /* Site coverage calc (if entered) */
+    const siteArea = parseFloat(sit.siteArea) || 0;
+    const buildFootprint = parseFloat(sit.buildingFootprint) || 0;
+    const coveragePct = siteArea > 0 ? (buildFootprint / siteArea * 100) : 0;
+    const coverageOK = coveragePct > 0 && coveragePct <= 60;
+    const coverageStatus = !siteArea || !buildFootprint ? '— (enter both values)' :
+                           coverageOK ? '✓ COMPLIANT (≤60%)' : '✗ NON-COMPLIANT (' + (coveragePct - 60).toFixed(1) + '% over)';
+    const coverageColor = !siteArea || !buildFootprint ? '#f6f8fa' : coverageOK ? '#dcfce7' : '#fee2e2';
+    
+    /* Permeability calc */
+    const permeArea = parseFloat(sit.permeableArea) || 0;
+    const permePct = siteArea > 0 ? (permeArea / siteArea * 100) : 0;
+    const permeOK = permePct >= 20;
+    const permeStatus = !permeArea ? '— (enter permeable area)' :
+                        permeOK ? '✓ COMPLIANT (≥20%)' : '✗ NON-COMPLIANT (' + (20 - permePct).toFixed(1) + '% short)';
+    const permeColor = !permeArea ? '#f6f8fa' : permeOK ? '#dcfce7' : '#fee2e2';
+    
+    return card('Siting + Report &amp; Consent — Calculator with Compliance Check', `
+      <p class="mini muted">Calculations per Building Regulations 2018 Part 5. Each calculator now compares your proposed value to the required value and shows compliance status.</p>
+
+      <h4 style="margin-top:14px">📐 Reg 79 — Side &amp; Rear Setback</h4>
+      <div class="row">
+        <div class="col">
+          <label>Wall height (m)</label>
+          <input type="number" step="0.1" value="${sit.wallHeight || ''}" oninput="PROJECT.siting.wallHeight=this.value;renderPages();goTab(7)">
+        </div>
+        <div class="col">
+          <label>Required setback (calculated)</label>
+          <input value="${reg79Required.toFixed(2)} m" readonly style="background:#f6f8fa;font-weight:bold">
+        </div>
+        <div class="col">
+          <label>Proposed setback (m)</label>
+          <input type="number" step="0.1" value="${sit.proposedSetback || ''}" oninput="PROJECT.siting.proposedSetback=this.value;renderPages();goTab(7)">
+        </div>
+        <div class="col">
+          <label>Compliance</label>
+          <input value="${reg79Status}" readonly style="background:${reg79Color};color:${reg79TextColor};font-weight:bold">
+        </div>
+      </div>
+      <p class="mini">Formula: 1.0 m base for walls ≤ 3.6 m. +0.3 m per metre over 3.6 m up to 6.9 m. +1.0 m per metre over 6.9 m. Compliance = proposed ≥ required.</p>
+
+      <h4 style="margin-top:14px">🧱 Reg 80 — Wall on Boundary</h4>
+      <div class="row">
+        <div class="col"><label>Boundary length (m)</label><input type="number" value="${sit.boundaryLength || ''}" oninput="PROJECT.siting.boundaryLength=this.value;renderPages();goTab(7)"></div>
+        <div class="col"><label>Max permitted (10m + 25% remainder)</label><input value="${reg80Max.toFixed(2)} m" readonly style="background:#f6f8fa"></div>
+        <div class="col"><label>Proposed wall on boundary (m)</label><input type="number" value="${sit.wallOnBoundary || ''}" oninput="PROJECT.siting.wallOnBoundary=this.value;renderPages();goTab(7)"></div>
+        <div class="col"><label>Compliance</label><input value="${reg80Status}" readonly style="background:${reg80Color};font-weight:bold"></div>
+      </div>
+      <p class="mini">Compliance = proposed ≤ max permitted. Average height ≤ 3.2 m, max 3.6 m. Walls fronting laneway have own rules.</p>
+
+      <h4 style="margin-top:14px">👁 Reg 84 — Overlooking</h4>
+      <div class="row">
+        <div class="col"><label>Window AFFL (m)</label><input type="number" step="0.1" value="${sit.windowAFFL || ''}" oninput="PROJECT.siting.windowAFFL=this.value;renderPages();goTab(7)"></div>
+        <div class="col"><label>Distance to boundary (m)</label><input type="number" step="0.1" value="${sit.windowDistance || ''}" oninput="PROJECT.siting.windowDistance=this.value;renderPages();goTab(7)"></div>
+        <div class="col"><label>Result</label><input value="${(!winH && !winDist) ? '— (enter values)' : reg84Triggers ? '✗ TRIGGERS — Screening required' : '✓ NOT TRIGGERED'}" readonly style="background:${(!winH && !winDist) ? '#f6f8fa' : reg84Triggers ? '#fee2e2' : '#dcfce7'};font-weight:bold"></div>
+      </div>
+      <p class="mini">Triggered when sill &gt; 800mm AFFL AND within 9m horizontal of habitable window/POS. Screen to 1700mm AFFL with ≤25% transparency, or fixed obscure glazing.</p>
+
+      <h4 style="margin-top:14px">🌿 Reg 86 — Private Open Space</h4>
+      <div class="row">
+        <div class="col"><label>POS area (m²)</label><input type="number" value="${sit.posArea || ''}" oninput="PROJECT.siting.posArea=this.value;renderPages();goTab(7)"></div>
+        <div class="col"><label>Required area</label><input value="≥ 80 m²" readonly style="background:#f6f8fa"></div>
+        <div class="col"><label>Min dimension (m)</label><input type="number" step="0.1" value="${sit.posMinDim || ''}" oninput="PROJECT.siting.posMinDim=this.value;renderPages();goTab(7)"></div>
+        <div class="col"><label>Compliance</label><input value="${reg86Status}" readonly style="background:${reg86Color};font-weight:bold"></div>
+      </div>
+      <p class="mini">Minimum 80m² POS with one part ≥ 25m² and min 3m dimension at ground level. Upper-storey balconies: 8m² with min 1.6m dimension.</p>
+
+      <h4 style="margin-top:14px">🏘 Site Coverage</h4>
+      <div class="row">
+        <div class="col"><label>Total site area (m²)</label><input type="number" value="${sit.siteArea || ''}" oninput="PROJECT.siting.siteArea=this.value;renderPages();goTab(7)"></div>
+        <div class="col"><label>Building footprint (m²)</label><input type="number" value="${sit.buildingFootprint || ''}" oninput="PROJECT.siting.buildingFootprint=this.value;renderPages();goTab(7)"></div>
+        <div class="col"><label>Calculated coverage</label><input value="${coveragePct ? coveragePct.toFixed(1) + '%' : '—'}" readonly style="background:#f6f8fa;font-weight:bold"></div>
+        <div class="col"><label>Compliance (max 60%)</label><input value="${coverageStatus}" readonly style="background:${coverageColor};font-weight:bold"></div>
+      </div>
+
+      <h4 style="margin-top:14px">💧 Site Permeability</h4>
+      <div class="row">
+        <div class="col"><label>Permeable surface (m²)</label><input type="number" value="${sit.permeableArea || ''}" oninput="PROJECT.siting.permeableArea=this.value;renderPages();goTab(7)"></div>
+        <div class="col"><label>Permeable percent</label><input value="${permePct ? permePct.toFixed(1) + '%' : '—'}" readonly style="background:#f6f8fa;font-weight:bold"></div>
+        <div class="col"><label>Compliance (≥ 20%)</label><input value="${permeStatus}" readonly style="background:${permeColor};font-weight:bold"></div>
+      </div>
+      <p class="mini">Permeable area divided by total site area must be ≥ 20% to allow stormwater absorption.</p>
+
+      <div style="margin-top:18px;padding:12px;background:#f6f8fa;border-radius:6px">
+        <h4 style="margin-top:0">Overall Siting Compliance Summary</h4>
+        <ul style="margin:6px 0">
+          <li>Reg 79 Setback: ${reg79Status}</li>
+          <li>Reg 80 Wall on Boundary: ${reg80Status}</li>
+          <li>Reg 84 Overlooking: ${reg84Triggers ? '✗ Screening required' : '✓ Not triggered'}</li>
+          <li>Reg 86 POS: ${reg86Status}</li>
+          <li>Site Coverage: ${coverageStatus}</li>
+          <li>Permeability: ${permeStatus}</li>
+        </ul>
+      </div>
+
+      <h4 style="margin-top:18px">📋 All Siting + Report &amp; Consent Items</h4>
+      ${typeof renderRequiredVsProposed === 'function' ? renderRequiredVsProposed('Siting + Report & Consent') : ''}
+    `);
+  };
+})();
+
+console.log('[Phase D] Desktop bug fixes loaded: tab persistence, real AI Mentor, file upload, full assessment, Siting compliance');
+
+
 </script>
 </body>
 </html>
