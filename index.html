@@ -2070,7 +2070,7 @@ function autoTemplates(){
   PROJECT.scope=`Scope of Engagement\n\nClient: ${c.name||''}\nSite: ${c.address||''}\nService: ${svc}\n\nHomi Building Consultants will provide ${svc.toLowerCase()} services in respect of the above project. Our scope includes:\n\n1. Review of the design documentation provided by the client and design team.\n2. Compliance assessment against the Building Act 1993, Building Regulations 2018, NCC 2022, and referenced Australian Standards.\n3. Identification of planning permit and Report & Consent triggers.\n4. Issue of consolidated RFIs to the design team where necessary.\n5. Preparation of a written compliance assessment report.\n\nExclusions: structural certification, energy rating assessment, BAL determination, town planning representation. These remain the responsibility of the appointed specialist consultants.`;
   PROJECT.agreement=`Consultant Agreement\n\nThis agreement is made between ${c.name||'[Client]'} (the Client) and Homi Building Consultants (the Consultant).\n\n1. The Consultant agrees to provide the services described in the Scope of Engagement.\n2. The Client agrees to provide all documentation and information reasonably required to enable the Consultant to perform the services.\n3. Fees: $${(PROJECT.autoFee||0).toLocaleString()} (excl. GST), payable on the milestones listed in the fee proposal.\n4. The Consultant's report is provided for the Client and the appointed Relevant Building Surveyor; reliance by third parties is not authorised without prior written consent.\n5. The Consultant's professional indemnity insurance limit is $2,000,000.\n6. This agreement is governed by the law of Victoria.`;
   PROJECT.terms=`Terms & Conditions\n\n• Fees are quoted exclusive of GST and disbursements.\n• Time-based work is charged at the prevailing hourly rate where scope variations arise.\n• Reports are issued upon clearance of the final invoice.\n• Information provided by the Client is relied upon as accurate; the Consultant accepts no liability for errors arising from incomplete or inaccurate input data.\n• Liability is limited as permitted under the Wrongs Act 1958 (Vic) and the Australian Consumer Law.`;
-  alert('Templates populated based on current client + service.');
+  /* Phase K2: popup removed at source */
   renderPages();
 }
 
@@ -17923,6 +17923,1762 @@ window.mbSaveCustomLocation = function() {
 };
 
 console.log('[Phase J] Edit button fixed + Add Custom Section always visible + Add Location prettier');
+
+
+
+/* ============================================================
+   PHASE K — UNIVERSAL EDIT + REORDER (V30)
+   • Global click delegation — Edit buttons work everywhere
+   • Universal Reorder mode — ▲▼ on every list (sections, items,
+     locations, photos, observations, jobs)
+   • Restored missing Phase G features (mbMoveFreeForm)
+   • Voice fallback with diagnostic
+   ============================================================ */
+
+/* =========================================================
+   1. MOBILE_STATE — ensure reorder mode flag exists
+   ========================================================= */
+if (typeof window.MOBILE_STATE === 'undefined') window.MOBILE_STATE = {};
+if (typeof MOBILE_STATE.reorderMode === 'undefined') MOBILE_STATE.reorderMode = false;
+if (typeof MOBILE_STATE.editSections === 'undefined') MOBILE_STATE.editSections = false;
+
+/* =========================================================
+   2. GLOBAL EDIT TOGGLE — works no matter where it's called from
+   ========================================================= */
+window.mbToggleEditSections = function() {
+  if (typeof haptic === 'function') haptic(8);
+  MOBILE_STATE.editSections = !MOBILE_STATE.editSections;
+  /* Also exit reorder if turning off */
+  if (!MOBILE_STATE.editSections) MOBILE_STATE.reorderMode = false;
+  console.log('[Phase K] Edit toggled to:', MOBILE_STATE.editSections);
+  if (typeof showToast === 'function') {
+    showToast(MOBILE_STATE.editSections ? '✎ Edit mode ON — tap ↕ to enable reorder, ✕ to delete' : '✓ Done editing', 'ok');
+  }
+  if (typeof renderMobilePage === 'function') {
+    renderMobilePage();
+  }
+};
+
+/* =========================================================
+   3. UNIVERSAL REORDER MODE
+   ========================================================= */
+window.mbToggleReorderMode = function() {
+  if (typeof haptic === 'function') haptic(8);
+  MOBILE_STATE.reorderMode = !MOBILE_STATE.reorderMode;
+  console.log('[Phase K] Reorder mode:', MOBILE_STATE.reorderMode);
+  if (typeof showToast === 'function') {
+    showToast(MOBILE_STATE.reorderMode ? '↕ Reorder mode ON — use ▲▼ arrows on each item' : '✓ Done reordering', 'ok');
+  }
+  if (typeof renderMobilePage === 'function') {
+    renderMobilePage();
+  }
+};
+
+/* =========================================================
+   4. REORDER HANDLERS — for every list type
+   ========================================================= */
+
+/* Free-form observations (Quick Observations in Actions) */
+window.mbMoveFreeForm = function(idx, dir) {
+  if (!PROJECT.freeFormObservations) return;
+  const list = PROJECT.freeFormObservations;
+  const newIdx = idx + dir;
+  if (newIdx < 0 || newIdx >= list.length) return;
+  const item = list.splice(idx, 1)[0];
+  list.splice(newIdx, 0, item);
+  if (typeof saveProject === 'function') saveProject(true);
+  if (typeof haptic === 'function') haptic(8);
+  if (typeof renderMobilePage === 'function') renderMobilePage();
+};
+
+/* Custom sections */
+window.mbMoveSection = function(sectionName, dir) {
+  const cur = PROJECT.inspections.currentType;
+  if (!PROJECT.customSections || !PROJECT.customSections[cur]) return;
+  const list = PROJECT.customSections[cur];
+  const idx = list.indexOf(sectionName);
+  if (idx < 0) return;
+  const newIdx = idx + dir;
+  if (newIdx < 0 || newIdx >= list.length) return;
+  const item = list.splice(idx, 1)[0];
+  list.splice(newIdx, 0, item);
+  if (typeof saveProject === 'function') saveProject(true);
+  if (typeof haptic === 'function') haptic(8);
+  if (typeof renderMobilePage === 'function') renderMobilePage();
+};
+
+/* Custom items within a section */
+window.mbMoveCustomItem = function(customIdx, dir) {
+  const cur = PROJECT.inspections.currentType;
+  if (!PROJECT.customInspectionItems || !PROJECT.customInspectionItems[cur]) return;
+  const list = PROJECT.customInspectionItems[cur];
+  const newIdx = customIdx + dir;
+  if (newIdx < 0 || newIdx >= list.length) return;
+  const item = list.splice(customIdx, 1)[0];
+  list.splice(newIdx, 0, item);
+  if (typeof saveProject === 'function') saveProject(true);
+  if (typeof haptic === 'function') haptic(8);
+  if (typeof renderMobilePage === 'function') renderMobilePage();
+};
+
+/* Custom locations */
+window.mbMoveCustomLocation = function(idx, dir) {
+  if (!PROJECT.locations || !PROJECT.locations.custom) return;
+  const list = PROJECT.locations.custom;
+  const newIdx = idx + dir;
+  if (newIdx < 0 || newIdx >= list.length) return;
+  const item = list.splice(idx, 1)[0];
+  list.splice(newIdx, 0, item);
+  if (typeof saveProject === 'function') saveProject(true);
+  if (typeof haptic === 'function') haptic(8);
+  /* Re-open location picker */
+  if (typeof mbOpenLocationPicker === 'function') mbOpenLocationPicker();
+};
+
+/* Photos within an item */
+window.mbMoveItemPhoto = function(itemKey, photoIdx, dir) {
+  const cur = PROJECT.inspections.currentType;
+  if (!PROJECT.inspections[cur] || !PROJECT.inspections[cur][itemKey] || !PROJECT.inspections[cur][itemKey].photos) return;
+  const photos = PROJECT.inspections[cur][itemKey].photos;
+  const newIdx = photoIdx + dir;
+  if (newIdx < 0 || newIdx >= photos.length) return;
+  const p = photos.splice(photoIdx, 1)[0];
+  photos.splice(newIdx, 0, p);
+  if (typeof saveProject === 'function') saveProject(true);
+  if (typeof haptic === 'function') haptic(8);
+  if (typeof renderMobilePage === 'function') renderMobilePage();
+};
+
+/* Site photos (general property photo collection) */
+window.mbMoveSitePhoto = function(idx, dir) {
+  if (!PROJECT.sitePhotos) return;
+  const list = PROJECT.sitePhotos;
+  const newIdx = idx + dir;
+  if (newIdx < 0 || newIdx >= list.length) return;
+  const p = list.splice(idx, 1)[0];
+  list.splice(newIdx, 0, p);
+  if (typeof saveProject === 'function') saveProject(true);
+  if (typeof haptic === 'function') haptic(8);
+  if (typeof renderMobilePage === 'function') renderMobilePage();
+};
+
+/* Limitations photos */
+window.mbMoveLimitationsPhoto = function(idx, dir) {
+  if (!PROJECT.limitationsPhotos) return;
+  const list = PROJECT.limitationsPhotos;
+  const newIdx = idx + dir;
+  if (newIdx < 0 || newIdx >= list.length) return;
+  const p = list.splice(idx, 1)[0];
+  list.splice(newIdx, 0, p);
+  if (typeof saveProject === 'function') saveProject(true);
+  if (typeof haptic === 'function') haptic(8);
+  if (typeof renderMobilePage === 'function') renderMobilePage();
+};
+
+/* Jobs in jobs list */
+window.mbMoveJob = function(jobId, dir) {
+  const idx = (typeof getJobsIndex === 'function') ? getJobsIndex() : [];
+  const i = idx.findIndex(j => j.id === jobId);
+  if (i < 0) return;
+  const newI = i + dir;
+  if (newI < 0 || newI >= idx.length) return;
+  const item = idx.splice(i, 1)[0];
+  idx.splice(newI, 0, item);
+  if (typeof setJobsIndex === 'function') setJobsIndex(idx);
+  if (typeof haptic === 'function') haptic(8);
+  if (typeof renderMobilePage === 'function') renderMobilePage();
+};
+
+/* =========================================================
+   5. UNIVERSAL REORDER BUTTON RENDERER
+   Returns HTML for ▲▼ buttons given a move function and bounds
+   ========================================================= */
+window.mbReorderBtns = function(moveCall, isFirst, isLast) {
+  if (!MOBILE_STATE.reorderMode) return '';
+  return '<div style="display:flex;flex-direction:column;gap:2px;margin-right:8px">' +
+    '<button onclick="event.stopPropagation();' + moveCall.replace('DIR', '-1') + '" style="background:' + (isFirst ? '#e5e7eb' : '#0D1B2A') + ';color:' + (isFirst ? '#94a3b8' : '#fff') + ';border:none;width:32px;height:24px;border-radius:4px;font-size:12px;font-weight:700;cursor:' + (isFirst ? 'not-allowed' : 'pointer') + '" ' + (isFirst ? 'disabled' : '') + '>▲</button>' +
+    '<button onclick="event.stopPropagation();' + moveCall.replace('DIR', '1') + '" style="background:' + (isLast ? '#e5e7eb' : '#0D1B2A') + ';color:' + (isLast ? '#94a3b8' : '#fff') + ';border:none;width:32px;height:24px;border-radius:4px;font-size:12px;font-weight:700;cursor:' + (isLast ? 'not-allowed' : 'pointer') + '" ' + (isLast ? 'disabled' : '') + '>▼</button>' +
+  '</div>';
+};
+
+/* =========================================================
+   6. REBUILD renderMobileSectionList — robust edit + reorder
+   ========================================================= */
+window.renderMobileSectionList = function() {
+  if (typeof ensureLocations === 'function') ensureLocations();
+  const cur = PROJECT.inspections.currentType;
+  const insp = INSPECTION_TYPES.find(t => t.id === cur);
+  if (!insp) return '<p style="padding:20px">No active inspection.</p>';
+  
+  const sections = (typeof mbBuildSectionList === 'function') ? mbBuildSectionList() : [];
+  const editMode = !!MOBILE_STATE.editSections;
+  const reorderMode = !!MOBILE_STATE.reorderMode;
+  const reportId = (PROJECT.id || 'NEW').replace('JOB_', '');
+  
+  /* Header */
+  let html = '<div style="display:flex;align-items:center;gap:6px;padding:0 0 12px;border-bottom:1px solid #e5e7eb;margin-bottom:14px">' +
+    '<button class="mb-iconbtn" style="background:#fff;color:#0D1B2A;border:1.5px solid #e5e7eb;width:42px;height:42px;border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:18px;flex-shrink:0" onclick="mbSwitchTab(\'dashboard\')" aria-label="Back">←</button>' +
+    '<div style="flex:1;min-width:0">' +
+      '<div style="font-size:9px;text-transform:uppercase;letter-spacing:1px;color:#64748b;font-weight:700">Report ID</div>' +
+      '<div style="font-size:12px;font-weight:600;color:#0D1B2A;font-family:monospace;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">' + esc(reportId) + '</div>' +
+    '</div>' +
+    '<button class="mb-iconbtn" style="background:#F05A28;color:#fff;width:42px;height:42px;border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:18px;border:none;flex-shrink:0" onclick="mbOpenSettingsMenu()" aria-label="Settings">⚙</button>' +
+    '<button id="editToggleBtn" style="padding:8px 12px;font-size:12px;font-weight:700;background:' + (editMode ? '#16a34a' : '#F05A28') + ';color:#fff;border:none;border-radius:20px;cursor:pointer;min-width:64px;flex-shrink:0" onclick="mbToggleEditSections()">' + (editMode ? '✓ Done' : '✎ Edit') + '</button>' +
+  '</div>';
+  
+  html += '<h2 style="font-family:\'Barlow Condensed\',sans-serif;text-transform:uppercase;letter-spacing:1px;margin:0 0 4px;font-size:18px;color:#0D1B2A">' + esc(insp.name) + '</h2>';
+  html += '<p style="font-size:11px;color:#64748b;margin:0 0 14px">' + esc(insp.standard || '') + '</p>';
+  
+  /* Edit mode banner with reorder toggle */
+  if (editMode) {
+    html += '<div style="background:#fff7ed;border:1.5px dashed #F05A28;border-radius:10px;padding:10px 12px;margin-bottom:14px">' +
+      '<div style="font-size:12px;color:#9a3412;margin-bottom:8px">' +
+        '<strong>Edit mode.</strong> Tap ✕ to remove custom sections. Tap "↕ Reorder" to move sections up/down.' +
+      '</div>' +
+      '<button onclick="mbToggleReorderMode()" style="background:' + (reorderMode ? '#16a34a' : '#0D1B2A') + ';color:#fff;border:none;border-radius:6px;padding:8px 14px;font-size:12px;font-weight:700;cursor:pointer;width:100%">' +
+        (reorderMode ? '✓ Done reordering' : '↕ Reorder sections') +
+      '</button>' +
+    '</div>';
+  }
+  
+  /* Comprehensive toggle */
+  if (insp._stdMarks) {
+    const stdCount = insp._stdMarks.filter(m => m === 'std').length;
+    const totalCount = insp._stdMarks.length;
+    html += '<div style="background:#fff;border-radius:10px;padding:10px 12px;margin-bottom:14px;display:flex;align-items:center;gap:10px;box-shadow:0 1px 3px rgba(0,0,0,.05)">' +
+      '<div style="flex:1">' +
+        '<div style="font-size:10px;text-transform:uppercase;letter-spacing:1px;color:#64748b;font-weight:700">Depth</div>' +
+        '<div style="font-size:13px;font-weight:600;color:#0D1B2A;margin-top:2px">' + (insp._comprehensive ? 'Comprehensive (' + totalCount + ' items)' : 'Standard (' + stdCount + ' items)') + '</div>' +
+      '</div>' +
+      '<button class="mb-detail-btn primary" style="padding:8px 14px;font-size:12px" onclick="mbToggleComprehensive()">' +
+        (insp._comprehensive ? 'Standard →' : 'Comprehensive →') + '</button>' +
+    '</div>';
+  }
+  
+  /* Sections */
+  if (!sections.length) {
+    html += '<div style="text-align:center;padding:40px 20px;color:#94a3b8;background:#fff;border-radius:12px"><div style="font-size:48px;margin-bottom:14px">📋</div><p>No sections in this template yet.</p></div>';
+  } else {
+    sections.forEach((sec, idx) => {
+      const dotColor = sec.complete ? '#16a34a' : '#F05A28';
+      const safeName = sec.name.replace(/'/g, "\\'");
+      const isFirst = idx === 0;
+      const isLast = idx === sections.length - 1;
+      
+      /* Click handler only if not in edit/reorder mode */
+      const onClick = (editMode || reorderMode) ? '' : 'onclick="mbOpenSection(\'' + safeName + '\')"';
+      
+      html += '<div style="background:#fff;border-radius:10px;padding:12px 14px;margin-bottom:8px;box-shadow:0 1px 3px rgba(0,0,0,.05);display:flex;align-items:center;gap:10px;cursor:' + ((editMode || reorderMode) ? 'default' : 'pointer') + '" ' + onClick + '>';
+      
+      /* Reorder buttons — only if section is custom and reorder mode on */
+      if (reorderMode && sec.isCustom) {
+        html += mbReorderBtns('mbMoveSection(\'' + safeName + '\',DIR)', isFirst, isLast);
+      }
+      
+      html += '<span style="width:12px;height:12px;border-radius:50%;background:' + dotColor + ';display:inline-block;flex-shrink:0"></span>';
+      html += '<div style="flex:1;min-width:0">';
+      html += '<div style="font-size:13px;font-weight:700;color:#0D1B2A;text-transform:uppercase;letter-spacing:1px;line-height:1.3">' + esc(sec.name) + '</div>';
+      html += '<div style="font-size:11px;color:#64748b;margin-top:2px">' + sec.completed + '/' + sec.total + ' items';
+      if (sec.failed) html += ' · <span style="color:#dc2626;font-weight:700">' + sec.failed + ' failed</span>';
+      if (sec.maint) html += ' · <span style="color:#d97706;font-weight:700">' + sec.maint + ' maint</span>';
+      if (sec.isCustom) html += ' · <span style="color:#F05A28;font-weight:700">custom</span>';
+      html += '</div></div>';
+      
+      if (editMode && sec.isCustom) {
+        html += '<button style="background:#fee2e2;color:#991b1b;padding:6px 10px;font-size:11px;border:none;border-radius:6px;font-weight:700;cursor:pointer" onclick="event.stopPropagation();mbDeleteCustomSection(\'' + safeName + '\')">✕</button>';
+      } else if (!editMode && !reorderMode) {
+        html += '<span style="color:#F05A28;font-size:18px;font-weight:700">›</span>';
+      } else if (editMode && !sec.isCustom) {
+        html += '<span style="font-size:9px;color:#94a3b8;padding:3px 6px;background:#f6f8fa;border-radius:3px">built-in</span>';
+      }
+      
+      html += '</div>';
+    });
+  }
+  
+  /* Always-visible Add Custom Section button */
+  html += '<button onclick="mbAddCustomSection()" style="display:flex;align-items:center;justify-content:center;gap:8px;width:100%;background:linear-gradient(180deg,#FF7A4A 0%,#F05A28 100%);color:#fff;border:none;border-radius:12px;padding:14px;margin-top:14px;font-size:14px;font-weight:700;cursor:pointer;box-shadow:0 2px 8px rgba(240,90,40,.3)">' +
+    '<span style="font-size:18px">+</span>' +
+    '<span>Add Custom Section</span>' +
+  '</button>';
+  
+  html += '<p style="font-size:11px;color:#94a3b8;text-align:center;margin:10px 0 30px">Tap ✎ Edit (top right) to remove or reorder. Use this button to add new sections like Pool Area, Granny Flat, Workshop.</p>';
+  
+  return html;
+};
+
+/* =========================================================
+   7. REBUILD renderMobileSectionDetail — also gets Edit mode
+   ========================================================= */
+window.renderMobileSectionDetail = function() {
+  const cur = PROJECT.inspections.currentType;
+  const insp = INSPECTION_TYPES.find(t => t.id === cur);
+  if (!insp || !MOBILE_STATE.activeSection) return renderMobileSectionList();
+  
+  const sectionName = MOBILE_STATE.activeSection;
+  const checks = PROJECT.inspections[cur] = PROJECT.inspections[cur] || {};
+  const editMode = !!MOBILE_STATE.editSections;
+  const reorderMode = !!MOBILE_STATE.reorderMode;
+  
+  /* Build items array */
+  const items = [];
+  if (insp.items) {
+    insp.items.forEach((label, i) => {
+      const sec = (insp._sections && insp._sections[i]) || 'Inspection items';
+      if (sec === sectionName) items.push({ label, key: 'item_' + i, section: sec, customItem: false });
+    });
+  }
+  if (insp.stages) {
+    insp.stages.forEach((s, si) => {
+      if (s.n === sectionName) s.chk.forEach((c, ci) => items.push({ label: c, key: 'stage_' + si + '_' + ci, section: s.n, customItem: false }));
+    });
+  }
+  if (insp.standards14 && sectionName === '14 Prescribed Standards') {
+    insp.standards14.forEach((it, i) => items.push({ label: it, key: 'rms_' + i, section: sectionName, customItem: false }));
+  }
+  const customItems = (PROJECT.customInspectionItems && PROJECT.customInspectionItems[cur]) || [];
+  customItems.forEach((ci, i) => {
+    if (ci.section === sectionName) items.push({ label: ci.label, key: 'custom_' + i, section: ci.section, customItem: true, customIdx: i });
+  });
+  
+  /* Header with same Edit button */
+  let html = '<div style="display:flex;align-items:center;gap:6px;padding:0 0 12px;margin-bottom:10px;border-bottom:1px solid #e5e7eb">';
+  html += '<button class="mb-iconbtn" style="background:#fff;color:#0D1B2A;border:1.5px solid #e5e7eb;width:42px;height:42px;border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:18px;flex-shrink:0" onclick="mbBackToSections()" aria-label="Back">←</button>';
+  html += '<div style="flex:1;min-width:0">';
+  html += '<div style="font-size:9px;text-transform:uppercase;letter-spacing:1px;color:#64748b;font-weight:700">Section</div>';
+  html += '<div style="font-size:13px;font-weight:700;color:#0D1B2A;text-transform:uppercase;letter-spacing:1px;line-height:1.3;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">' + esc(sectionName) + '</div>';
+  html += '</div>';
+  /* Add item button */
+  html += '<button class="mb-detail-btn primary" style="padding:8px 10px;font-size:11px;flex-shrink:0" onclick="mbAddCustomItem(\'' + sectionName.replace(/'/g, "\\'") + '\')">+ Item</button>';
+  /* Edit button — works inside section too */
+  html += '<button style="padding:8px 10px;font-size:11px;font-weight:700;background:' + (editMode ? '#16a34a' : '#F05A28') + ';color:#fff;border:none;border-radius:18px;cursor:pointer;min-width:56px;flex-shrink:0" onclick="mbToggleEditSections()">' + (editMode ? '✓ Done' : '✎ Edit') + '</button>';
+  html += '</div>';
+  
+  /* Edit mode banner inside section */
+  if (editMode) {
+    html += '<div style="background:#fff7ed;border:1.5px dashed #F05A28;border-radius:10px;padding:10px 12px;margin-bottom:14px">' +
+      '<div style="font-size:12px;color:#9a3412;margin-bottom:8px">' +
+        '<strong>Edit mode.</strong> Tap ✕ to remove custom items. Tap "↕ Reorder" to move items.' +
+      '</div>' +
+      '<button onclick="mbToggleReorderMode()" style="background:' + (reorderMode ? '#16a34a' : '#0D1B2A') + ';color:#fff;border:none;border-radius:6px;padding:8px 14px;font-size:12px;font-weight:700;cursor:pointer;width:100%">' +
+        (reorderMode ? '✓ Done reordering' : '↕ Reorder items') +
+      '</button>' +
+    '</div>';
+  }
+  
+  /* Location selector */
+  if (typeof mbRenderLocationSelector === 'function') {
+    html += mbRenderLocationSelector();
+  }
+  
+  /* Filter chips */
+  html += '<div class="mb-filter-chips" style="margin-bottom:10px">' +
+    '<button class="' + (MOBILE_STATE.filterStatus === 'all' || !MOBILE_STATE.filterStatus ? 'active' : '') + '" onclick="mbFilterItems(\'all\')">All</button>' +
+    '<button class="' + (MOBILE_STATE.filterStatus === 'pending' ? 'active' : '') + '" onclick="mbFilterItems(\'pending\')">Pending</button>' +
+    '<button class="' + (MOBILE_STATE.filterStatus === 'failed' ? 'active' : '') + '" onclick="mbFilterItems(\'failed\')">Failed</button>' +
+    '<button class="' + (MOBILE_STATE.filterStatus === 'maintenance' ? 'active' : '') + '" onclick="mbFilterItems(\'maintenance\')">Maint</button>' +
+    '<button class="' + (MOBILE_STATE.filterStatus === 'pass' ? 'active' : '') + '" onclick="mbFilterItems(\'pass\')">Pass</button>' +
+  '</div>';
+  
+  /* Filter */
+  const q = (MOBILE_STATE.searchQuery || '').toLowerCase();
+  const filtered = items.filter(item => {
+    if (q && !item.label.toLowerCase().includes(q)) return false;
+    const v = checks[item.key] || {};
+    const s = v.status;
+    if (MOBILE_STATE.filterStatus === 'pending') return !s;
+    if (MOBILE_STATE.filterStatus === 'failed') return s === 'Fail' || s === 'Defect';
+    if (MOBILE_STATE.filterStatus === 'maintenance') return s === 'Maintenance' || s === 'RFI';
+    if (MOBILE_STATE.filterStatus === 'pass') return s === 'Pass' || s === 'Compliant';
+    return true;
+  });
+  
+  if (!filtered.length) {
+    html += '<div style="text-align:center;padding:40px 20px;color:#94a3b8;background:#fff;border-radius:12px">';
+    html += items.length ? '<p>No items match the current filter.</p>' : '<p>This section has no items yet.<br>Tap "+ Item" above to add custom inspection items.</p>';
+    html += '</div>';
+  } else {
+    /* If reorder mode is on and there are custom items, wrap them with reorder buttons */
+    filtered.forEach((item, idx) => {
+      /* Use the original renderMobileItemCard if available, but inject reorder if needed */
+      if (reorderMode && item.customItem) {
+        const customItemList = customItems.filter(c => c.section === sectionName);
+        const myCustomIdx = customItems.findIndex(c => c === customItems[item.customIdx]);
+        const sameSection = customItemList.findIndex(c => c === customItems[item.customIdx]);
+        const isFirstInSection = sameSection === 0;
+        const isLastInSection = sameSection === customItemList.length - 1;
+        
+        /* Render with reorder wrap */
+        const v = checks[item.key] || {};
+        html += '<div style="background:#fff;border-radius:10px;padding:10px 12px;margin-bottom:8px;display:flex;align-items:center;gap:10px;box-shadow:0 1px 3px rgba(0,0,0,.05)">';
+        html += mbReorderBtns('mbMoveCustomItem(' + item.customIdx + ',DIR)', isFirstInSection, isLastInSection);
+        html += '<div style="flex:1"><div style="font-size:13px;font-weight:600;color:#0D1B2A">' + esc(item.label) + '</div>';
+        html += '<div style="font-size:10px;color:#F05A28;font-weight:700;text-transform:uppercase;letter-spacing:1px;margin-top:2px">custom</div></div>';
+        if (editMode) {
+          html += '<button style="background:#fee2e2;color:#991b1b;padding:6px 10px;font-size:11px;border:none;border-radius:6px;font-weight:700;cursor:pointer" onclick="mbDeleteCustomItem(' + item.customIdx + ')">✕</button>';
+        }
+        html += '</div>';
+      } else if (editMode && item.customItem) {
+        /* Edit mode but not reordering — just show delete X */
+        const v = checks[item.key] || {};
+        html += '<div style="background:#fff;border-radius:10px;padding:10px 12px;margin-bottom:8px;display:flex;align-items:center;gap:10px;box-shadow:0 1px 3px rgba(0,0,0,.05)">';
+        html += '<div style="flex:1"><div style="font-size:13px;font-weight:600;color:#0D1B2A">' + esc(item.label) + '</div>';
+        html += '<div style="font-size:10px;color:#F05A28;font-weight:700;text-transform:uppercase;letter-spacing:1px;margin-top:2px">custom</div></div>';
+        html += '<button style="background:#fee2e2;color:#991b1b;padding:6px 10px;font-size:11px;border:none;border-radius:6px;font-weight:700;cursor:pointer" onclick="mbDeleteCustomItem(' + item.customIdx + ')">✕</button>';
+        html += '</div>';
+      } else {
+        /* Normal rendering */
+        if (typeof renderMobileItemCard === 'function') {
+          html += renderMobileItemCard(item, checks);
+        }
+      }
+    });
+  }
+  
+  return html;
+};
+
+/* =========================================================
+   8. Delete custom item helper
+   ========================================================= */
+window.mbDeleteCustomItem = function(customIdx) {
+  const cur = PROJECT.inspections.currentType;
+  if (!PROJECT.customInspectionItems || !PROJECT.customInspectionItems[cur]) return;
+  if (!confirm('Remove this custom item?')) return;
+  PROJECT.customInspectionItems[cur].splice(customIdx, 1);
+  if (typeof saveProject === 'function') saveProject(true);
+  if (typeof haptic === 'function') haptic(8);
+  if (typeof renderMobilePage === 'function') renderMobilePage();
+};
+
+/* =========================================================
+   9. ENHANCE renderMobileActions — restore reorder UI
+   ========================================================= */
+(function injectActionsReorder() {
+  const orig = window.renderMobileActions;
+  if (typeof orig !== 'function') return;
+  
+  window.renderMobileActions = function() {
+    let html = orig.apply(this, arguments);
+    const freeForm = PROJECT.freeFormObservations || [];
+    if (!freeForm.length) return html;
+    
+    const editMode = !!MOBILE_STATE.editSections;
+    const reorderMode = !!MOBILE_STATE.reorderMode;
+    
+    /* Find Quick Observations section and rebuild it */
+    const h2Marker = 'Quick Observations';
+    const h2Idx = html.indexOf(h2Marker);
+    if (h2Idx < 0) return html;
+    const h2Start = html.lastIndexOf('<h2', h2Idx);
+    if (h2Start < 0) return html;
+    /* Find next h2 or end */
+    const nextH2 = html.indexOf('<h2', h2Idx + h2Marker.length);
+    const endIdx = nextH2 > 0 ? nextH2 : html.length;
+    
+    /* Build new Quick Observations section */
+    let newSec = '<h2 style="color:#0D1B2A;font-family:\'Barlow Condensed\';text-transform:uppercase;letter-spacing:1px;margin:14px 0 8px">Quick Observations (' + freeForm.length + ')</h2>';
+    
+    /* Edit/reorder controls */
+    newSec += '<div style="display:flex;gap:6px;margin-bottom:10px">' +
+      '<button onclick="mbToggleEditSections()" style="flex:1;padding:8px;font-size:12px;font-weight:700;background:' + (editMode ? '#16a34a' : '#F05A28') + ';color:#fff;border:none;border-radius:8px;cursor:pointer">' +
+        (editMode ? '✓ Done' : '✎ Edit') +
+      '</button>' +
+      '<button onclick="mbToggleReorderMode()" style="flex:1;padding:8px;font-size:12px;font-weight:700;background:' + (reorderMode ? '#16a34a' : '#0D1B2A') + ';color:#fff;border:none;border-radius:8px;cursor:pointer">' +
+        (reorderMode ? '✓ Done' : '↕ Reorder') +
+      '</button>' +
+    '</div>';
+    
+    freeForm.forEach((obs, i) => {
+      const sevColor = obs.severity >= 5 ? '#dc2626' : obs.severity >= 4 ? '#ea580c' : obs.severity >= 3 ? '#d97706' : obs.severity >= 2 ? '#65a30d' : '#6b7280';
+      const isFirst = i === 0;
+      const isLast = i === freeForm.length - 1;
+      
+      newSec += '<div class="mb-item-card" style="border-left-color:' + sevColor + ';display:flex;align-items:flex-start;gap:10px">';
+      
+      if (reorderMode) {
+        newSec += mbReorderBtns('mbMoveFreeForm(' + i + ',DIR)', isFirst, isLast);
+      }
+      
+      newSec += '<div style="flex:1;min-width:0">';
+      newSec += '<div class="mb-item-cat">📍 ' + esc(obs.location || '—') + ' · ' + new Date(obs.timestamp).toLocaleDateString('en-AU') + '</div>';
+      newSec += '<div class="mb-item-title">' + esc(obs.description.slice(0, 200)) + (obs.description.length > 200 ? '…' : '') + '</div>';
+      newSec += '<div class="mb-card-chips">';
+      newSec += '<span class="mb-chip" style="background:' + sevColor + ';color:#fff">⬤ Sev ' + obs.severity + '</span>';
+      if (obs.photos && obs.photos.length) newSec += '<span class="mb-chip">📷 ' + obs.photos.length + '</span>';
+      if (obs.aiGenerated) newSec += '<span class="mb-chip" style="background:#10b981;color:#fff">🤖 AI</span>';
+      newSec += '</div>';
+      newSec += '<div style="display:flex;gap:4px;margin-top:8px">';
+      newSec += '<button class="mb-detail-btn" style="flex:1" onclick="mbViewFreeForm(' + i + ')">View</button>';
+      newSec += '<button class="mb-detail-btn" style="background:#fee2e2;color:#991b1b" onclick="mbDeleteFreeForm(' + i + ')">✕</button>';
+      newSec += '</div>';
+      newSec += '</div></div>';
+    });
+    
+    return html.slice(0, h2Start) + newSec + html.slice(endIdx);
+  };
+})();
+
+/* =========================================================
+   10. VOICE NOTES FALLBACK + DIAGNOSTIC
+   ========================================================= */
+window.mbVoiceDiagnostic = function() {
+  const hasWebkit = 'webkitSpeechRecognition' in window;
+  const hasStd = 'SpeechRecognition' in window;
+  const isPWA = window.matchMedia('(display-mode: standalone)').matches || window.navigator.standalone;
+  const isHTTPS = window.location.protocol === 'https:';
+  const ua = navigator.userAgent;
+  
+  let report = '=== VOICE INPUT DIAGNOSTIC ===\n\n';
+  report += 'HTTPS: ' + (isHTTPS ? 'YES ✓' : 'NO ✗ (voice requires HTTPS)') + '\n';
+  report += 'webkitSpeechRecognition: ' + (hasWebkit ? 'YES ✓' : 'NO') + '\n';
+  report += 'SpeechRecognition: ' + (hasStd ? 'YES ✓' : 'NO') + '\n';
+  report += 'PWA mode (home screen app): ' + (isPWA ? 'YES — known iOS limitation' : 'NO') + '\n';
+  report += '\nUser Agent: ' + ua.slice(0, 150) + '\n\n';
+  
+  if (!hasWebkit && !hasStd) {
+    report += '❌ Browser does not support speech recognition.\n\n';
+    report += 'Workaround: Use the iOS keyboard microphone instead.\n';
+    report += '  1. Tap into any note field\n';
+    report += '  2. Long-press the spacebar (one-handed keyboard) or tap the mic icon on the keyboard\n';
+    report += '  3. Speak — text appears in the field\n';
+    report += '\nThis works in PWA mode without requiring web Speech API.';
+    return report;
+  }
+  
+  /* Try to instantiate */
+  try {
+    const R = window.SpeechRecognition || window.webkitSpeechRecognition;
+    const r = new R();
+    report += '✓ Recognition object created\n';
+    r.lang = 'en-AU';
+    report += '✓ Language set to en-AU\n';
+    report += '\nTo test: tap a note field, then tap 🎙 button. If iOS prompts for mic permission, accept.\n';
+    report += '\nIf voice button does nothing in PWA mode:\n';
+    report += '  • Open the app in Safari (not from home screen)\n';
+    report += '  • Or use the iOS keyboard mic instead (long-press spacebar)';
+  } catch (e) {
+    report += '✗ Could not instantiate: ' + e.message;
+  }
+  
+  return report;
+};
+
+window.openVoiceDiagnostic = function() {
+  const dialog = document.createElement('div');
+  dialog.id = 'voiceDiagDialog';
+  dialog.style.cssText = 'position:fixed;top:0;left:0;right:0;bottom:0;background:rgba(0,0,0,.8);z-index:99999;display:flex;align-items:center;justify-content:center;padding:20px';
+  dialog.innerHTML = '<div style="background:#fff;border-radius:12px;max-width:500px;width:100%;max-height:80vh;display:flex;flex-direction:column"><div style="padding:14px 18px;background:#0D1B2A;color:#fff;border-radius:12px 12px 0 0;display:flex;align-items:center;gap:10px"><strong style="flex:1">🎙 Voice Diagnostic</strong><button onclick="document.body.removeChild(document.getElementById(\'voiceDiagDialog\'))" style="background:transparent;color:#fff;border:1px solid rgba(255,255,255,.3);border-radius:6px;padding:4px 10px;cursor:pointer">Close</button></div><pre id="voiceDiagOutput" style="flex:1;overflow:auto;padding:18px;margin:0;font-family:monospace;font-size:11px;line-height:1.5;background:#0f172a;color:#86efac;border-radius:0 0 12px 12px;white-space:pre-wrap;word-break:break-word"></pre></div>';
+  document.body.appendChild(dialog);
+  const out = document.getElementById('voiceDiagOutput');
+  if (out) out.textContent = mbVoiceDiagnostic();
+};
+
+/* Inject voice diagnostic into Setup tab */
+(function injectVoiceDiag() {
+  const orig = window.renderMobileSetup;
+  if (typeof orig !== 'function') return;
+  window.renderMobileSetup = function() {
+    let html = orig.apply(this, arguments);
+    const block = '<div class="mb-item-card" style="border-left-color:#10b981"><div class="mb-item-cat">🎙 Voice Input Diagnostic</div><div style="font-size:13px;color:#475569;margin-bottom:8px">Check if voice dictation will work on this device. Tips for fallback included.</div><button class="mb-detail-btn primary" style="width:100%" onclick="openVoiceDiagnostic()">🎙 Test Voice Input</button></div>';
+    return html + block;
+  };
+})();
+
+console.log('[Phase K] Universal Edit + Reorder + Voice diagnostic loaded');
+
+
+
+/* ============================================================
+   PHASE L — REAL EDIT MODE + LOCAL BACKUP + LIBRARY (V31)
+   • Edit affordances on EVERY section + item:
+     ✏ rename, 🚫 hide / ✕ delete, ↕ reorder
+   • PDF export of report → iPhone Files app
+   • JSON export of whole job (with photos) → Files app
+   • JSON import (restore from Files pick)
+   • Email report (mailto draft)
+   • Improved Add Defect — three-tab picker: Type | Library | AI
+   ============================================================ */
+
+/* =========================================================
+   1. OVERRIDES STORAGE — per-job custom display names & hides
+   ========================================================= */
+window.ensureOverrides = function() {
+  if (!PROJECT.overrides) PROJECT.overrides = {};
+  const cur = PROJECT.inspections.currentType;
+  if (!PROJECT.overrides[cur]) PROJECT.overrides[cur] = {};
+  const ov = PROJECT.overrides[cur];
+  if (!ov.renamedSections) ov.renamedSections = {};
+  if (!ov.hiddenSections) ov.hiddenSections = [];
+  if (!ov.sectionOrder) ov.sectionOrder = [];
+  if (!ov.renamedItems) ov.renamedItems = {};
+  if (!ov.hiddenItems) ov.hiddenItems = [];
+  if (!ov.itemOrder) ov.itemOrder = {};
+  return ov;
+};
+
+/* Get display name for a section (with rename applied) */
+window.mbSectionDisplay = function(rawName) {
+  const ov = ensureOverrides();
+  return ov.renamedSections[rawName] || rawName;
+};
+
+/* Get display label for an item */
+window.mbItemDisplay = function(itemKey, defaultLabel) {
+  const ov = ensureOverrides();
+  return ov.renamedItems[itemKey] || defaultLabel;
+};
+
+/* =========================================================
+   2. EDIT HANDLERS — SECTIONS
+   ========================================================= */
+window.mbRenameSection = function(rawName) {
+  if (typeof haptic === 'function') haptic(8);
+  const ov = ensureOverrides();
+  const cur = ov.renamedSections[rawName] || rawName;
+  mbBottomSheet('Rename Section',
+    '<p style="font-size:13px;color:#64748b;margin-bottom:10px">Rename "<strong>' + esc(rawName) + '</strong>". Saved per job — doesn\'t change template.</p>' +
+    '<span class="mb-detail-label">New name *</span>' +
+    '<input id="renSecInp" class="mb-detail-input" value="' + esc(cur) + '" style="font-size:16px">' +
+    '<div class="mb-detail-actions" style="margin-top:14px;flex-wrap:wrap">' +
+      '<button class="mb-detail-btn" onclick="mbCloseSheet()">Cancel</button>' +
+      (ov.renamedSections[rawName] ? '<button class="mb-detail-btn" style="background:#fef3c7;color:#92400e" onclick="mbResetSection(\'' + rawName.replace(/'/g,"\\'") + '\')">↺ Reset</button>' : '') +
+      '<button class="mb-detail-btn primary" onclick="mbSaveSection(\'' + rawName.replace(/'/g,"\\'") + '\')">✓ Save</button>' +
+    '</div>'
+  );
+  setTimeout(function(){ const i=document.getElementById('renSecInp'); if(i){i.focus();i.select();} },200);
+};
+
+window.mbSaveSection = function(rawName) {
+  const inp = document.getElementById('renSecInp');
+  const newName = inp ? inp.value.trim() : '';
+  if (!newName) { showToast('Enter a name', 'warn'); return; }
+  const ov = ensureOverrides();
+  if (newName === rawName) delete ov.renamedSections[rawName];
+  else ov.renamedSections[rawName] = newName;
+  saveProject(true);
+  haptic([10,30,10]);
+  mbCloseSheet();
+  showToast('✓ Renamed', 'ok');
+  renderMobilePage();
+};
+
+window.mbResetSection = function(rawName) {
+  const ov = ensureOverrides();
+  delete ov.renamedSections[rawName];
+  saveProject(true);
+  mbCloseSheet();
+  showToast('✓ Reset', 'ok');
+  renderMobilePage();
+};
+
+window.mbHideSection = function(rawName) {
+  if (!confirm('Hide "' + rawName + '"? Can be restored in Edit mode below.')) return;
+  const ov = ensureOverrides();
+  if (ov.hiddenSections.indexOf(rawName) === -1) ov.hiddenSections.push(rawName);
+  saveProject(true);
+  haptic(8);
+  showToast('✓ Hidden', 'ok');
+  renderMobilePage();
+};
+
+window.mbUnhideSection = function(rawName) {
+  const ov = ensureOverrides();
+  const i = ov.hiddenSections.indexOf(rawName);
+  if (i > -1) ov.hiddenSections.splice(i, 1);
+  saveProject(true);
+  haptic(8);
+  showToast('✓ Restored', 'ok');
+  renderMobilePage();
+};
+
+window.mbDeleteCustomSection = function(rawName) {
+  if (!confirm('Delete custom section "' + rawName + '" and all items inside it?')) return;
+  const cur = PROJECT.inspections.currentType;
+  if (PROJECT.customSections && PROJECT.customSections[cur]) {
+    const i = PROJECT.customSections[cur].indexOf(rawName);
+    if (i > -1) PROJECT.customSections[cur].splice(i, 1);
+  }
+  if (PROJECT.customInspectionItems && PROJECT.customInspectionItems[cur]) {
+    PROJECT.customInspectionItems[cur] = PROJECT.customInspectionItems[cur].filter(function(c){return c.section!==rawName;});
+  }
+  saveProject(true);
+  haptic([10,30,10]);
+  showToast('✓ Deleted', 'ok');
+  renderMobilePage();
+};
+
+window.mbMoveSection = function(rawName, dir) {
+  const ov = ensureOverrides();
+  if (!ov.sectionOrder.length) {
+    const sections = mbBuildSectionList ? mbBuildSectionList() : [];
+    ov.sectionOrder = sections.map(function(s){return s.name;});
+  }
+  let idx = ov.sectionOrder.indexOf(rawName);
+  if (idx < 0) { ov.sectionOrder.push(rawName); idx = ov.sectionOrder.length - 1; }
+  const newIdx = idx + dir;
+  if (newIdx < 0 || newIdx >= ov.sectionOrder.length) return;
+  const item = ov.sectionOrder.splice(idx, 1)[0];
+  ov.sectionOrder.splice(newIdx, 0, item);
+  saveProject(true);
+  haptic(8);
+  renderMobilePage();
+};
+
+/* =========================================================
+   3. EDIT HANDLERS — ITEMS
+   ========================================================= */
+function getItemOriginalLabel(itemKey) {
+  const cur = PROJECT.inspections.currentType;
+  const insp = INSPECTION_TYPES.find(function(t){return t.id===cur;});
+  if (!insp) return '';
+  if (itemKey.indexOf('item_') === 0) return insp.items ? insp.items[parseInt(itemKey.slice(5))] || '' : '';
+  if (itemKey.indexOf('stage_') === 0) {
+    const p = itemKey.split('_');
+    return insp.stages && insp.stages[parseInt(p[1])] && insp.stages[parseInt(p[1])].chk ? insp.stages[parseInt(p[1])].chk[parseInt(p[2])] || '' : '';
+  }
+  if (itemKey.indexOf('rms_') === 0) return insp.standards14 ? insp.standards14[parseInt(itemKey.slice(4))] || '' : '';
+  if (itemKey.indexOf('custom_') === 0) {
+    const ci = (PROJECT.customInspectionItems && PROJECT.customInspectionItems[cur]) ? PROJECT.customInspectionItems[cur][parseInt(itemKey.slice(7))] : null;
+    return ci ? ci.label : '';
+  }
+  return '';
+}
+
+window.mbRenameItem = function(itemKey) {
+  if (typeof haptic === 'function') haptic(8);
+  const ov = ensureOverrides();
+  const cur = ov.renamedItems[itemKey] || getItemOriginalLabel(itemKey);
+  mbBottomSheet('Rename Item',
+    '<p style="font-size:13px;color:#64748b;margin-bottom:10px">Rename this inspection item.</p>' +
+    '<span class="mb-detail-label">Item label *</span>' +
+    '<textarea id="renItemInp" class="mb-detail-input" rows="2" style="font-size:16px">' + esc(cur) + '</textarea>' +
+    '<div class="mb-detail-actions" style="margin-top:14px;flex-wrap:wrap">' +
+      '<button class="mb-detail-btn" onclick="mbCloseSheet()">Cancel</button>' +
+      (ov.renamedItems[itemKey] ? '<button class="mb-detail-btn" style="background:#fef3c7;color:#92400e" onclick="mbResetItem(\'' + itemKey + '\')">↺ Reset</button>' : '') +
+      '<button class="mb-detail-btn primary" onclick="mbSaveItemName(\'' + itemKey + '\')">✓ Save</button>' +
+    '</div>'
+  );
+  setTimeout(function(){ const i=document.getElementById('renItemInp'); if(i){i.focus();i.select();} },200);
+};
+
+window.mbSaveItemName = function(itemKey) {
+  const inp = document.getElementById('renItemInp');
+  const newName = inp ? inp.value.trim() : '';
+  if (!newName) { showToast('Enter a name', 'warn'); return; }
+  const ov = ensureOverrides();
+  if (itemKey.indexOf('custom_') === 0) {
+    const cur = PROJECT.inspections.currentType;
+    const ci = (PROJECT.customInspectionItems[cur] || [])[parseInt(itemKey.slice(7))];
+    if (ci) ci.label = newName;
+  } else {
+    ov.renamedItems[itemKey] = newName;
+  }
+  saveProject(true);
+  haptic([10,30,10]);
+  mbCloseSheet();
+  showToast('✓ Item renamed', 'ok');
+  renderMobilePage();
+};
+
+window.mbResetItem = function(itemKey) {
+  const ov = ensureOverrides();
+  delete ov.renamedItems[itemKey];
+  saveProject(true);
+  mbCloseSheet();
+  showToast('✓ Reset', 'ok');
+  renderMobilePage();
+};
+
+window.mbHideItem = function(itemKey) {
+  const ov = ensureOverrides();
+  if (ov.hiddenItems.indexOf(itemKey) === -1) ov.hiddenItems.push(itemKey);
+  saveProject(true);
+  haptic(8);
+  showToast('✓ Item hidden', 'ok');
+  renderMobilePage();
+};
+
+window.mbUnhideItem = function(itemKey) {
+  const ov = ensureOverrides();
+  const i = ov.hiddenItems.indexOf(itemKey);
+  if (i > -1) ov.hiddenItems.splice(i, 1);
+  saveProject(true);
+  haptic(8);
+  showToast('✓ Restored', 'ok');
+  renderMobilePage();
+};
+
+window.mbDeleteCustomItem = function(customIdx) {
+  if (!confirm('Delete this custom item?')) return;
+  const cur = PROJECT.inspections.currentType;
+  if (!PROJECT.customInspectionItems || !PROJECT.customInspectionItems[cur]) return;
+  PROJECT.customInspectionItems[cur].splice(customIdx, 1);
+  saveProject(true);
+  haptic([10,30,10]);
+  showToast('✓ Deleted', 'ok');
+  renderMobilePage();
+};
+
+window.mbMoveItem = function(itemKey, sectionName, dir) {
+  const ov = ensureOverrides();
+  if (!ov.itemOrder[sectionName]) {
+    const sections = mbBuildSectionList ? mbBuildSectionList() : [];
+    const sec = sections.find(function(s){return s.name===sectionName;});
+    if (!sec) return;
+    ov.itemOrder[sectionName] = sec.items.map(function(it){return it.key;});
+  }
+  const order = ov.itemOrder[sectionName];
+  let idx = order.indexOf(itemKey);
+  if (idx < 0) { order.push(itemKey); idx = order.length - 1; }
+  const newIdx = idx + dir;
+  if (newIdx < 0 || newIdx >= order.length) return;
+  const it = order.splice(idx, 1)[0];
+  order.splice(newIdx, 0, it);
+  saveProject(true);
+  haptic(8);
+  renderMobilePage();
+};
+
+/* =========================================================
+   4. UNIVERSAL EDIT-MODE ROW HTML  
+   ========================================================= */
+window.mbEditModeRow = function(opts) {
+  /* opts: {kind:'section'|'item', name, key, isCustom, isFirst, isLast, isHidden, sectionName} */
+  if (!MOBILE_STATE.editSections) return '';
+  
+  const safeName = (opts.name || '').replace(/'/g, "\\'");
+  const safeKey = (opts.key || '').replace(/'/g, "\\'");
+  const sectionSafe = (opts.sectionName || '').replace(/'/g, "\\'");
+  
+  let buttons = '<div style="display:flex;gap:4px;align-items:center;flex-wrap:wrap;margin-top:8px;padding-top:8px;border-top:1px dashed #e5e7eb">';
+  
+  /* Reorder ▲ ▼ */
+  const moveCall = opts.kind === 'section'
+    ? 'mbMoveSection(\'' + safeName + '\',{D})'
+    : 'mbMoveItem(\'' + safeKey + '\',\'' + sectionSafe + '\',{D})';
+  buttons += '<button onclick="event.stopPropagation();' + moveCall.replace('{D}','-1') + '" style="background:' + (opts.isFirst ? '#e5e7eb' : '#0D1B2A') + ';color:' + (opts.isFirst ? '#94a3b8' : '#fff') + ';border:none;width:32px;height:30px;border-radius:6px;font-size:13px;font-weight:700;cursor:' + (opts.isFirst ? 'not-allowed' : 'pointer') + '" ' + (opts.isFirst ? 'disabled' : '') + ' title="Move up">▲</button>';
+  buttons += '<button onclick="event.stopPropagation();' + moveCall.replace('{D}','1') + '" style="background:' + (opts.isLast ? '#e5e7eb' : '#0D1B2A') + ';color:' + (opts.isLast ? '#94a3b8' : '#fff') + ';border:none;width:32px;height:30px;border-radius:6px;font-size:13px;font-weight:700;cursor:' + (opts.isLast ? 'not-allowed' : 'pointer') + '" ' + (opts.isLast ? 'disabled' : '') + ' title="Move down">▼</button>';
+  
+  /* Rename */
+  const renameCall = opts.kind === 'section'
+    ? 'mbRenameSection(\'' + safeName + '\')'
+    : 'mbRenameItem(\'' + safeKey + '\')';
+  buttons += '<button onclick="event.stopPropagation();' + renameCall + '" style="background:#fff;color:#0D1B2A;border:1.5px solid #cbd5e1;height:30px;padding:0 10px;border-radius:6px;font-size:12px;font-weight:600;cursor:pointer">✏ Rename</button>';
+  
+  /* Hide / Unhide / Delete */
+  if (opts.isCustom) {
+    const delCall = opts.kind === 'section'
+      ? 'mbDeleteCustomSection(\'' + safeName + '\')'
+      : 'mbDeleteCustomItem(' + (opts.customIdx || 0) + ')';
+    buttons += '<button onclick="event.stopPropagation();' + delCall + '" style="background:#fee2e2;color:#991b1b;border:1.5px solid #fecaca;height:30px;padding:0 10px;border-radius:6px;font-size:12px;font-weight:700;cursor:pointer">✕ Delete</button>';
+  } else if (opts.isHidden) {
+    const unhideCall = opts.kind === 'section'
+      ? 'mbUnhideSection(\'' + safeName + '\')'
+      : 'mbUnhideItem(\'' + safeKey + '\')';
+    buttons += '<button onclick="event.stopPropagation();' + unhideCall + '" style="background:#dbeafe;color:#1e40af;border:1.5px solid #bfdbfe;height:30px;padding:0 10px;border-radius:6px;font-size:12px;font-weight:600;cursor:pointer">👁 Unhide</button>';
+  } else {
+    const hideCall = opts.kind === 'section'
+      ? 'mbHideSection(\'' + safeName + '\')'
+      : 'mbHideItem(\'' + safeKey + '\')';
+    buttons += '<button onclick="event.stopPropagation();' + hideCall + '" style="background:#fff7ed;color:#9a3412;border:1.5px solid #fed7aa;height:30px;padding:0 10px;border-radius:6px;font-size:12px;font-weight:600;cursor:pointer">🚫 Hide</button>';
+  }
+  
+  buttons += '</div>';
+  return buttons;
+};
+
+/* =========================================================
+   5. REBUILD renderMobileSectionList with full Edit affordances
+   ========================================================= */
+window.renderMobileSectionList = function() {
+  if (typeof ensureLocations === 'function') ensureLocations();
+  const cur = PROJECT.inspections.currentType;
+  const insp = INSPECTION_TYPES.find(function(t){return t.id===cur;});
+  if (!insp) return '<p style="padding:20px">No active inspection.</p>';
+  
+  const ov = ensureOverrides();
+  let sections = mbBuildSectionList ? mbBuildSectionList() : [];
+  
+  /* Apply hidden filter (unless in edit mode, then show hidden ones too) */
+  const editMode = !!MOBILE_STATE.editSections;
+  if (!editMode) {
+    sections = sections.filter(function(s){ return ov.hiddenSections.indexOf(s.name) === -1; });
+  }
+  
+  /* Apply explicit order if any */
+  if (ov.sectionOrder.length) {
+    sections.sort(function(a, b) {
+      const ai = ov.sectionOrder.indexOf(a.name);
+      const bi = ov.sectionOrder.indexOf(b.name);
+      if (ai === -1 && bi === -1) return 0;
+      if (ai === -1) return 1;
+      if (bi === -1) return -1;
+      return ai - bi;
+    });
+  }
+  
+  const reportId = (PROJECT.id || 'NEW').replace('JOB_', '');
+  
+  /* Header */
+  let html = '<div style="display:flex;align-items:center;gap:6px;padding:0 0 12px;border-bottom:1px solid #e5e7eb;margin-bottom:14px">' +
+    '<button class="mb-iconbtn" style="background:#fff;color:#0D1B2A;border:1.5px solid #e5e7eb;width:42px;height:42px;border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:18px;flex-shrink:0" onclick="mbSwitchTab(\'dashboard\')" aria-label="Back">←</button>' +
+    '<div style="flex:1;min-width:0">' +
+      '<div style="font-size:9px;text-transform:uppercase;letter-spacing:1px;color:#64748b;font-weight:700">Report ID</div>' +
+      '<div style="font-size:12px;font-weight:600;color:#0D1B2A;font-family:monospace;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">' + esc(reportId) + '</div>' +
+    '</div>' +
+    '<button class="mb-iconbtn" style="background:#F05A28;color:#fff;width:42px;height:42px;border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:18px;border:none;flex-shrink:0" onclick="mbOpenSettingsMenu()" aria-label="Settings">⚙</button>' +
+    '<button id="editToggleBtn" style="padding:8px 12px;font-size:12px;font-weight:700;background:' + (editMode ? '#16a34a' : '#F05A28') + ';color:#fff;border:none;border-radius:20px;cursor:pointer;min-width:64px;flex-shrink:0" onclick="mbToggleEditSections()">' + (editMode ? '✓ Done' : '✎ Edit') + '</button>' +
+  '</div>';
+  
+  html += '<h2 style="font-family:\'Barlow Condensed\',sans-serif;text-transform:uppercase;letter-spacing:1px;margin:0 0 4px;font-size:18px;color:#0D1B2A">' + esc(insp.name) + '</h2>';
+  html += '<p style="font-size:11px;color:#64748b;margin:0 0 14px">' + esc(insp.standard || '') + '</p>';
+  
+  if (editMode) {
+    html += '<div style="background:#fff7ed;border:1.5px dashed #F05A28;border-radius:10px;padding:10px 12px;margin-bottom:14px;font-size:12px;color:#9a3412"><strong>✎ Edit mode active.</strong> Each section shows: ▲▼ reorder · ✏ rename · 🚫 hide (built-in) or ✕ delete (custom). Tap "✓ Done" when finished.</div>';
+  }
+  
+  /* Sections list */
+  if (!sections.length) {
+    html += '<div style="text-align:center;padding:40px 20px;color:#94a3b8;background:#fff;border-radius:12px"><div style="font-size:48px;margin-bottom:14px">📋</div><p>No sections in this template yet.</p></div>';
+  } else {
+    sections.forEach(function(sec, idx) {
+      const isHidden = ov.hiddenSections.indexOf(sec.name) > -1;
+      const displayName = mbSectionDisplay(sec.name);
+      const dotColor = sec.complete ? '#16a34a' : '#F05A28';
+      const safeName = sec.name.replace(/'/g, "\\'");
+      const onClick = editMode ? '' : 'onclick="mbOpenSection(\'' + safeName + '\')"';
+      const opacity = isHidden ? '0.55' : '1';
+      
+      html += '<div style="background:#fff;border-radius:10px;padding:12px 14px;margin-bottom:8px;box-shadow:0 1px 3px rgba(0,0,0,.05);cursor:' + (editMode ? 'default' : 'pointer') + ';opacity:' + opacity + '" ' + onClick + '>';
+      
+      /* Top row */
+      html += '<div style="display:flex;align-items:center;gap:10px">';
+      html += '<span style="width:12px;height:12px;border-radius:50%;background:' + dotColor + ';display:inline-block;flex-shrink:0"></span>';
+      html += '<div style="flex:1;min-width:0">';
+      html += '<div style="font-size:13px;font-weight:700;color:#0D1B2A;text-transform:uppercase;letter-spacing:1px;line-height:1.3">' + esc(displayName);
+      if (isHidden) html += ' <span style="font-size:9px;color:#9a3412;background:#fff7ed;padding:2px 5px;border-radius:3px;text-transform:none;letter-spacing:0;font-weight:600">HIDDEN</span>';
+      html += '</div>';
+      html += '<div style="font-size:11px;color:#64748b;margin-top:2px">' + sec.completed + '/' + sec.total + ' items';
+      if (sec.failed) html += ' · <span style="color:#dc2626;font-weight:700">' + sec.failed + ' failed</span>';
+      if (sec.maint) html += ' · <span style="color:#d97706;font-weight:700">' + sec.maint + ' maint</span>';
+      if (sec.isCustom) html += ' · <span style="color:#F05A28;font-weight:700">custom</span>';
+      html += '</div></div>';
+      if (!editMode) html += '<span style="color:#F05A28;font-size:18px;font-weight:700">›</span>';
+      html += '</div>';
+      
+      /* Edit controls row */
+      if (editMode) {
+        html += mbEditModeRow({
+          kind: 'section',
+          name: sec.name,
+          isCustom: sec.isCustom,
+          isHidden: isHidden,
+          isFirst: idx === 0,
+          isLast: idx === sections.length - 1
+        });
+      }
+      
+      html += '</div>';
+    });
+  }
+  
+  /* Add Custom Section button — always visible */
+  html += '<button onclick="mbAddCustomSection()" style="display:flex;align-items:center;justify-content:center;gap:8px;width:100%;background:linear-gradient(180deg,#FF7A4A 0%,#F05A28 100%);color:#fff;border:none;border-radius:12px;padding:14px;margin-top:14px;font-size:14px;font-weight:700;cursor:pointer;box-shadow:0 2px 8px rgba(240,90,40,.3)">' +
+    '<span style="font-size:18px">+</span><span>Add Custom Section</span></button>';
+  html += '<p style="font-size:11px;color:#94a3b8;text-align:center;margin:10px 0 30px">Tap ✎ Edit to rename, hide, reorder or delete sections.</p>';
+  
+  return html;
+};
+
+/* =========================================================
+   6. REBUILD renderMobileSectionDetail with edit affordances
+   ========================================================= */
+window.renderMobileSectionDetail = function() {
+  const cur = PROJECT.inspections.currentType;
+  const insp = INSPECTION_TYPES.find(function(t){return t.id===cur;});
+  if (!insp || !MOBILE_STATE.activeSection) return renderMobileSectionList();
+  
+  const ov = ensureOverrides();
+  const sectionName = MOBILE_STATE.activeSection;
+  const displayName = mbSectionDisplay(sectionName);
+  const checks = PROJECT.inspections[cur] = PROJECT.inspections[cur] || {};
+  const editMode = !!MOBILE_STATE.editSections;
+  
+  /* Build items array */
+  const items = [];
+  if (insp.items) insp.items.forEach(function(label, i) {
+    const sec = (insp._sections && insp._sections[i]) || 'Inspection items';
+    if (sec === sectionName) items.push({label:label, key:'item_'+i, section:sec, customItem:false});
+  });
+  if (insp.stages) insp.stages.forEach(function(s, si) {
+    if (s.n === sectionName) s.chk.forEach(function(c, ci) { items.push({label:c, key:'stage_'+si+'_'+ci, section:s.n, customItem:false}); });
+  });
+  if (insp.standards14 && sectionName === '14 Prescribed Standards') {
+    insp.standards14.forEach(function(it, i) { items.push({label:it, key:'rms_'+i, section:sectionName, customItem:false}); });
+  }
+  const customItems = (PROJECT.customInspectionItems && PROJECT.customInspectionItems[cur]) || [];
+  customItems.forEach(function(ci, i) {
+    if (ci.section === sectionName) items.push({label:ci.label, key:'custom_'+i, section:ci.section, customItem:true, customIdx:i});
+  });
+  
+  /* Apply explicit order if any */
+  if (ov.itemOrder[sectionName] && ov.itemOrder[sectionName].length) {
+    items.sort(function(a, b) {
+      const ai = ov.itemOrder[sectionName].indexOf(a.key);
+      const bi = ov.itemOrder[sectionName].indexOf(b.key);
+      if (ai === -1 && bi === -1) return 0;
+      if (ai === -1) return 1;
+      if (bi === -1) return -1;
+      return ai - bi;
+    });
+  }
+  
+  /* Filter hidden (unless edit mode) */
+  let visibleItems = items;
+  if (!editMode) visibleItems = items.filter(function(it){ return ov.hiddenItems.indexOf(it.key) === -1; });
+  
+  /* Header */
+  let html = '<div style="display:flex;align-items:center;gap:6px;padding:0 0 12px;margin-bottom:10px;border-bottom:1px solid #e5e7eb">';
+  html += '<button class="mb-iconbtn" style="background:#fff;color:#0D1B2A;border:1.5px solid #e5e7eb;width:42px;height:42px;border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:18px;flex-shrink:0" onclick="mbBackToSections()" aria-label="Back">←</button>';
+  html += '<div style="flex:1;min-width:0">';
+  html += '<div style="font-size:9px;text-transform:uppercase;letter-spacing:1px;color:#64748b;font-weight:700">Section</div>';
+  html += '<div style="font-size:13px;font-weight:700;color:#0D1B2A;text-transform:uppercase;letter-spacing:1px;line-height:1.3;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">' + esc(displayName) + '</div>';
+  html += '</div>';
+  html += '<button class="mb-detail-btn primary" style="padding:8px 10px;font-size:11px;flex-shrink:0" onclick="mbAddCustomItem(\'' + sectionName.replace(/'/g,"\\'") + '\')">+ Item</button>';
+  html += '<button style="padding:8px 10px;font-size:11px;font-weight:700;background:' + (editMode ? '#16a34a' : '#F05A28') + ';color:#fff;border:none;border-radius:18px;cursor:pointer;min-width:56px;flex-shrink:0" onclick="mbToggleEditSections()">' + (editMode ? '✓ Done' : '✎ Edit') + '</button>';
+  html += '</div>';
+  
+  if (editMode) {
+    html += '<div style="background:#fff7ed;border:1.5px dashed #F05A28;border-radius:10px;padding:10px 12px;margin-bottom:14px;font-size:12px;color:#9a3412"><strong>✎ Edit mode.</strong> Each item: ▲▼ reorder · ✏ rename · 🚫 hide (built-in) or ✕ delete (custom).</div>';
+  }
+  
+  /* Location selector */
+  if (typeof mbRenderLocationSelector === 'function') html += mbRenderLocationSelector();
+  
+  /* Filter chips */
+  if (!editMode) {
+    html += '<div class="mb-filter-chips" style="margin-bottom:10px">' +
+      '<button class="' + (MOBILE_STATE.filterStatus === 'all' || !MOBILE_STATE.filterStatus ? 'active' : '') + '" onclick="mbFilterItems(\'all\')">All</button>' +
+      '<button class="' + (MOBILE_STATE.filterStatus === 'pending' ? 'active' : '') + '" onclick="mbFilterItems(\'pending\')">Pending</button>' +
+      '<button class="' + (MOBILE_STATE.filterStatus === 'failed' ? 'active' : '') + '" onclick="mbFilterItems(\'failed\')">Failed</button>' +
+      '<button class="' + (MOBILE_STATE.filterStatus === 'maintenance' ? 'active' : '') + '" onclick="mbFilterItems(\'maintenance\')">Maint</button>' +
+      '<button class="' + (MOBILE_STATE.filterStatus === 'pass' ? 'active' : '') + '" onclick="mbFilterItems(\'pass\')">Pass</button>' +
+    '</div>';
+  }
+  
+  /* Apply filter */
+  const q = (MOBILE_STATE.searchQuery || '').toLowerCase();
+  let filtered = visibleItems.filter(function(item) {
+    if (editMode) return true;
+    if (q && !item.label.toLowerCase().includes(q)) return false;
+    const v = checks[item.key] || {};
+    const s = v.status;
+    if (MOBILE_STATE.filterStatus === 'pending') return !s;
+    if (MOBILE_STATE.filterStatus === 'failed') return s === 'Fail' || s === 'Defect';
+    if (MOBILE_STATE.filterStatus === 'maintenance') return s === 'Maintenance' || s === 'RFI';
+    if (MOBILE_STATE.filterStatus === 'pass') return s === 'Pass' || s === 'Compliant';
+    return true;
+  });
+  
+  if (!filtered.length) {
+    html += '<div style="text-align:center;padding:40px 20px;color:#94a3b8;background:#fff;border-radius:12px">';
+    html += visibleItems.length ? '<p>No items match the current filter.</p>' : '<p>This section has no items.<br>Tap "+ Item" to add a custom inspection item.</p>';
+    html += '</div>';
+  } else if (editMode) {
+    /* Edit-mode rendering of items */
+    filtered.forEach(function(item, idx) {
+      const isHidden = ov.hiddenItems.indexOf(item.key) > -1;
+      const displayLabel = mbItemDisplay(item.key, item.label);
+      const opacity = isHidden ? '0.55' : '1';
+      html += '<div style="background:#fff;border-radius:10px;padding:12px 14px;margin-bottom:8px;box-shadow:0 1px 3px rgba(0,0,0,.05);opacity:' + opacity + '">';
+      html += '<div style="font-size:13px;font-weight:600;color:#0D1B2A;line-height:1.4">' + esc(displayLabel);
+      if (isHidden) html += ' <span style="font-size:9px;color:#9a3412;background:#fff7ed;padding:2px 5px;border-radius:3px;font-weight:600">HIDDEN</span>';
+      if (item.customItem) html += ' <span style="font-size:9px;color:#F05A28;background:#fff7ed;padding:2px 5px;border-radius:3px;font-weight:600">CUSTOM</span>';
+      html += '</div>';
+      html += mbEditModeRow({
+        kind: 'item',
+        name: displayLabel,
+        key: item.key,
+        sectionName: sectionName,
+        isCustom: item.customItem,
+        isHidden: isHidden,
+        isFirst: idx === 0,
+        isLast: idx === filtered.length - 1,
+        customIdx: item.customIdx
+      });
+      html += '</div>';
+    });
+  } else {
+    /* Normal rendering — apply renames */
+    filtered.forEach(function(item) {
+      const displayLabel = mbItemDisplay(item.key, item.label);
+      const itemWithDisplay = Object.assign({}, item, {label: displayLabel});
+      if (typeof renderMobileItemCard === 'function') html += renderMobileItemCard(itemWithDisplay, checks);
+    });
+  }
+  
+  return html;
+};
+
+console.log('[Phase L part 1] Real edit mode (rename/hide/delete/reorder) loaded');
+
+
+
+/* ============================================================
+   PHASE L PART 2 — LOCAL BACKUP & THREE-TAB DEFECT PICKER (V31)
+   ============================================================ */
+
+/* =========================================================
+   1. FILE DOWNLOAD HELPER — works on iOS Safari & PWA
+   ========================================================= */
+window.downloadFile = function(filename, mimeType, content) {
+  try {
+    let blob;
+    if (typeof content === 'string') {
+      blob = new Blob([content], { type: mimeType });
+    } else {
+      blob = content;
+    }
+    const url = URL.createObjectURL(blob);
+    
+    /* iOS PWA — use Web Share if available, falls back to download link */
+    const isIOS = /iPad|iPhone|iPod/.test(navigator.userAgent);
+    const isPWA = window.matchMedia('(display-mode: standalone)').matches || window.navigator.standalone;
+    
+    if (isIOS && isPWA && navigator.share && blob.size < 10 * 1024 * 1024) {
+      /* Use Web Share API — opens iOS share sheet with "Save to Files" option */
+      const file = new File([blob], filename, { type: mimeType });
+      if (navigator.canShare && navigator.canShare({ files: [file] })) {
+        navigator.share({ files: [file], title: filename }).catch(function(e) {
+          console.warn('Share cancelled or failed:', e);
+        }).finally(function() {
+          setTimeout(function(){ URL.revokeObjectURL(url); }, 5000);
+        });
+        return;
+      }
+    }
+    
+    /* Standard download link */
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = filename;
+    a.style.display = 'none';
+    document.body.appendChild(a);
+    a.click();
+    setTimeout(function() {
+      try { document.body.removeChild(a); } catch(e) {}
+      URL.revokeObjectURL(url);
+    }, 1000);
+  } catch (err) {
+    console.error('Download failed:', err);
+    showToast('Download failed: ' + err.message.slice(0, 60), 'err');
+  }
+};
+
+/* =========================================================
+   2. JSON EXPORT OF WHOLE JOB
+   ========================================================= */
+window.mbExportJobJSON = function() {
+  haptic(8);
+  try {
+    const job = JSON.parse(JSON.stringify(PROJECT)); /* deep clone */
+    const payload = {
+      _format: 'HBC_OS_JOB',
+      _version: 1,
+      _exportedAt: new Date().toISOString(),
+      _appVersion: 'V31',
+      job: job
+    };
+    const json = JSON.stringify(payload, null, 2);
+    const sizeKB = (json.length / 1024).toFixed(0);
+    
+    const clientName = (job.client && job.client.name) ? job.client.name.replace(/[^a-z0-9]/gi, '_') : 'Untitled';
+    const dateStr = new Date().toISOString().slice(0,10);
+    const filename = 'HBC_Job_' + clientName + '_' + dateStr + '.json';
+    
+    downloadFile(filename, 'application/json', json);
+    showToast('✓ Job exported (' + sizeKB + ' KB)', 'ok');
+    haptic([10,30,10]);
+  } catch (err) {
+    console.error('Export failed:', err);
+    showToast('Export failed: ' + err.message.slice(0, 60), 'err');
+  }
+};
+
+/* =========================================================
+   3. JSON IMPORT
+   ========================================================= */
+window.mbImportJobJSON = function() {
+  haptic(8);
+  const input = document.createElement('input');
+  input.type = 'file';
+  input.accept = 'application/json,.json';
+  input.onchange = function(e) {
+    const file = e.target.files && e.target.files[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = function(ev) {
+      try {
+        const payload = JSON.parse(ev.target.result);
+        if (!payload._format || payload._format !== 'HBC_OS_JOB') {
+          throw new Error('Not a valid HBC OS job export file');
+        }
+        if (!payload.job) throw new Error('No job data in file');
+        
+        const importedJob = payload.job;
+        const clientName = (importedJob.client && importedJob.client.name) || 'Imported job';
+        const exportedAt = payload._exportedAt ? new Date(payload._exportedAt).toLocaleDateString('en-AU') : 'unknown date';
+        
+        if (!confirm('Import job for "' + clientName + '" (exported ' + exportedAt + ')?\n\nThis will create a NEW job — your current job is not affected.')) return;
+        
+        /* Create new job ID to avoid collision */
+        importedJob.id = 'JOB_' + Date.now().toString(36) + '_imp';
+        importedJob.createdAt = importedJob.createdAt || Date.now();
+        importedJob.updatedAt = Date.now();
+        
+        /* Save to IDB jobs store */
+        if (typeof saveJobToIDB === 'function') {
+          saveJobToIDB(importedJob).then(function() {
+            const idx = getJobsIndex();
+            idx.unshift({
+              id: importedJob.id,
+              clientName: clientName,
+              address: (importedJob.client && importedJob.client.address) || '',
+              updatedAt: Date.now()
+            });
+            setJobsIndex(idx);
+            showToast('✓ Imported as new job', 'ok');
+            haptic([10,30,10]);
+            renderMobilePage();
+          }).catch(function(err) {
+            showToast('Save failed: ' + err.message.slice(0,60), 'err');
+          });
+        } else {
+          /* Fallback — just load into PROJECT */
+          window.PROJECT = importedJob;
+          if (typeof setActiveJobId === 'function') setActiveJobId(importedJob.id);
+          saveProject(true);
+          showToast('✓ Job loaded', 'ok');
+          renderMobilePage();
+        }
+      } catch (err) {
+        showToast('Import failed: ' + err.message.slice(0, 80), 'err');
+      }
+    };
+    reader.readAsText(file);
+  };
+  input.click();
+};
+
+/* =========================================================
+   4. REPORT GENERATION → TEXT FOR EXPORT / EMAIL
+   ========================================================= */
+window.mbBuildReportText = function() {
+  const c = PROJECT.client || {};
+  const cur = PROJECT.inspections.currentType;
+  const insp = INSPECTION_TYPES.find(function(t){return t.id===cur;});
+  
+  let text = '';
+  text += '═══════════════════════════════════════\n';
+  text += '  INSPECTION REPORT\n';
+  text += '═══════════════════════════════════════\n\n';
+  text += 'Property: ' + (c.address || 'unspecified') + '\n';
+  text += 'Client: ' + (c.name || 'unspecified') + '\n';
+  text += 'Inspection: ' + (insp ? insp.name : '—') + '\n';
+  text += 'Date: ' + new Date().toLocaleDateString('en-AU') + '\n';
+  text += 'Inspector: ' + (PROJECT.settings && PROJECT.settings.inspectorName ? PROJECT.settings.inspectorName : '—') + '\n';
+  text += '\n───────────────────────────────────────\n';
+  text += '  STANDARD APPLIED\n';
+  text += '───────────────────────────────────────\n';
+  text += (insp && insp.standard) || '—';
+  text += '\n\n───────────────────────────────────────\n';
+  text += '  SCOPE\n';
+  text += '───────────────────────────────────────\n';
+  text += (insp && insp.scope) || '—';
+  text += '\n\n───────────────────────────────────────\n';
+  text += '  DEFECTS & OBSERVATIONS\n';
+  text += '───────────────────────────────────────\n';
+  
+  const obs = PROJECT.freeFormObservations || [];
+  if (!obs.length) {
+    text += 'No quick observations recorded.\n';
+  } else {
+    obs.forEach(function(o, i) {
+      text += (i+1) + '. [Severity ' + o.severity + '] ' + (o.location || '') + '\n';
+      text += '   ' + (o.description || '') + '\n';
+      if (o.photos && o.photos.length) text += '   [' + o.photos.length + ' photo(s) attached]\n';
+      text += '\n';
+    });
+  }
+  
+  /* Section items */
+  text += '\n───────────────────────────────────────\n';
+  text += '  ITEM-LEVEL FINDINGS\n';
+  text += '───────────────────────────────────────\n';
+  const checks = (PROJECT.inspections && PROJECT.inspections[cur]) || {};
+  const sections = mbBuildSectionList ? mbBuildSectionList() : [];
+  let findingCount = 0;
+  sections.forEach(function(sec) {
+    const fails = sec.items.filter(function(it){
+      const v = checks[it.key] || {};
+      return v.status === 'Fail' || v.status === 'Defect' || v.status === 'Maintenance';
+    });
+    if (fails.length) {
+      text += '\n• ' + sec.name + '\n';
+      fails.forEach(function(it){
+        const v = checks[it.key] || {};
+        findingCount++;
+        text += '  – ' + mbItemDisplay(it.key, it.label) + '  [' + v.status + ']\n';
+        if (v.notes) text += '    ' + v.notes + '\n';
+      });
+    }
+  });
+  if (!findingCount) text += '\nAll inspected items passed.\n';
+  
+  /* General notes */
+  if (PROJECT.generalNotes) {
+    text += '\n───────────────────────────────────────\n';
+    text += '  GENERAL NOTES\n';
+    text += '───────────────────────────────────────\n';
+    text += PROJECT.generalNotes + '\n';
+  }
+  
+  text += '\n═══════════════════════════════════════\n';
+  text += '  Disclaimers and methodology apply.\n';
+  text += '  This is a summary; the full PDF report\n';
+  text += '  contains the complete assessment.\n';
+  text += '═══════════════════════════════════════\n';
+  
+  return text;
+};
+
+/* =========================================================
+   5. PDF EXPORT — uses print-to-PDF on iOS
+   ========================================================= */
+window.mbExportReportPDF = function() {
+  haptic(8);
+  showToast('Building PDF — this opens print sheet, choose "Save to Files"', 'ok');
+  
+  try {
+    const c = PROJECT.client || {};
+    const cur = PROJECT.inspections.currentType;
+    const insp = INSPECTION_TYPES.find(function(t){return t.id===cur;});
+    const reportText = mbBuildReportText();
+    const obs = PROJECT.freeFormObservations || [];
+    
+    /* Build HTML that prints nicely */
+    let html = '<!DOCTYPE html><html><head><meta charset="utf-8">';
+    html += '<title>HBC Report — ' + esc((c.name || 'Inspection')) + '</title>';
+    html += '<style>' +
+      '@page { size: A4; margin: 18mm; }' +
+      'body { font-family: -apple-system, BlinkMacSystemFont, "Helvetica Neue", Arial, sans-serif; color: #0D1B2A; font-size: 11pt; line-height: 1.5; }' +
+      'h1 { color: #0D1B2A; font-size: 22pt; margin: 0 0 6mm; border-bottom: 3px solid #F05A28; padding-bottom: 2mm; }' +
+      'h2 { color: #F05A28; font-size: 13pt; margin: 6mm 0 2mm; text-transform: uppercase; letter-spacing: 0.5px; border-bottom: 1px solid #e5e7eb; padding-bottom: 1mm; }' +
+      'h3 { color: #0D1B2A; font-size: 11pt; margin: 4mm 0 2mm; }' +
+      '.meta { display: grid; grid-template-columns: 130px 1fr; gap: 2mm 6mm; font-size: 10pt; margin-bottom: 6mm; }' +
+      '.meta b { color: #64748b; font-weight: 600; }' +
+      '.sev { display:inline-block; padding:1mm 3mm; border-radius:3mm; color:#fff; font-size:8pt; font-weight:700; }' +
+      '.sev-5 { background:#dc2626 } .sev-4 { background:#ea580c } .sev-3 { background:#d97706 } .sev-2 { background:#65a30d } .sev-1 { background:#6b7280 }' +
+      '.finding { margin: 3mm 0; padding: 3mm; background: #f9fafb; border-left: 3px solid #F05A28; }' +
+      '.finding-loc { font-size: 9pt; color: #64748b; }' +
+      '.finding-desc { margin-top: 2mm; font-size: 10pt; }' +
+      'img.photo { max-width: 60mm; max-height: 60mm; margin: 2mm; border: 1px solid #e5e7eb; }' +
+      '.photos-row { display: flex; flex-wrap: wrap; margin-top: 2mm; }' +
+      '.disclaimer { margin-top: 8mm; padding-top: 4mm; border-top: 1px solid #e5e7eb; font-size: 8pt; color: #64748b; }' +
+    '</style></head><body>';
+    
+    html += '<h1>Inspection Report</h1>';
+    html += '<div class="meta">';
+    html += '<b>Property</b><span>' + esc(c.address || '—') + '</span>';
+    html += '<b>Client</b><span>' + esc(c.name || '—') + '</span>';
+    html += '<b>Inspection type</b><span>' + esc(insp ? insp.name : '—') + '</span>';
+    html += '<b>Date</b><span>' + new Date().toLocaleDateString('en-AU', {weekday:'long', day:'numeric', month:'long', year:'numeric'}) + '</span>';
+    html += '<b>Inspector</b><span>' + esc((PROJECT.settings && PROJECT.settings.inspectorName) || '—') + '</span>';
+    html += '<b>Report ID</b><span>' + esc(PROJECT.id || 'NEW') + '</span>';
+    html += '</div>';
+    
+    if (PROJECT.propertyPhoto) {
+      html += '<img src="' + PROJECT.propertyPhoto + '" style="max-width:100%;max-height:80mm;border-radius:2mm;margin-bottom:6mm" alt="Property">';
+    }
+    
+    if (insp && insp.standard) {
+      html += '<h2>Standard Applied</h2><p>' + esc(insp.standard) + '</p>';
+    }
+    if (insp && insp.scope) {
+      html += '<h2>Scope</h2><p>' + esc(insp.scope) + '</p>';
+    }
+    
+    html += '<h2>Defects & Observations</h2>';
+    if (!obs.length) {
+      html += '<p>No quick observations recorded.</p>';
+    } else {
+      obs.forEach(function(o, i) {
+        html += '<div class="finding">';
+        html += '<div class="finding-loc"><strong>' + (i+1) + '.</strong> 📍 ' + esc(o.location || '') + ' · <span class="sev sev-' + o.severity + '">Severity ' + o.severity + '</span></div>';
+        html += '<div class="finding-desc">' + esc(o.description || '') + '</div>';
+        if (o.photos && o.photos.length) {
+          html += '<div class="photos-row">';
+          o.photos.forEach(function(p){
+            html += '<img class="photo" src="' + p.data + '">';
+          });
+          html += '</div>';
+        }
+        html += '</div>';
+      });
+    }
+    
+    /* Section findings */
+    const checks = (PROJECT.inspections && PROJECT.inspections[cur]) || {};
+    const sections = mbBuildSectionList ? mbBuildSectionList() : [];
+    let secWithFails = sections.filter(function(s){
+      return s.items.some(function(it){
+        const v = checks[it.key] || {};
+        return v.status === 'Fail' || v.status === 'Defect' || v.status === 'Maintenance';
+      });
+    });
+    
+    if (secWithFails.length) {
+      html += '<h2>Item-level Findings</h2>';
+      secWithFails.forEach(function(sec){
+        html += '<h3>' + esc(mbSectionDisplay(sec.name)) + '</h3>';
+        sec.items.forEach(function(it){
+          const v = checks[it.key] || {};
+          if (v.status === 'Fail' || v.status === 'Defect' || v.status === 'Maintenance') {
+            const sevNum = v.severity || (v.status === 'Maintenance' ? 2 : 3);
+            html += '<div class="finding">';
+            html += '<div class="finding-loc"><strong>' + esc(mbItemDisplay(it.key, it.label)) + '</strong> · <span class="sev sev-' + sevNum + '">' + esc(v.status) + '</span></div>';
+            if (v.notes) html += '<div class="finding-desc">' + esc(v.notes) + '</div>';
+            html += '</div>';
+          }
+        });
+      });
+    }
+    
+    if (PROJECT.generalNotes) {
+      html += '<h2>General Notes</h2><p>' + esc(PROJECT.generalNotes).replace(/\n/g, '<br>') + '</p>';
+    }
+    
+    /* Limitations */
+    if (PROJECT.limitationsPhotos && PROJECT.limitationsPhotos.length) {
+      html += '<h2>Inspection Limitations</h2>';
+      html += '<p>Areas of the property that could not be fully inspected, shown below:</p>';
+      html += '<div class="photos-row">';
+      PROJECT.limitationsPhotos.forEach(function(p){
+        html += '<img class="photo" src="' + p.data + '">';
+        if (p.caption) html += '<div style="font-size:8pt;color:#64748b;width:60mm;text-align:center;margin:0 2mm 4mm">' + esc(p.caption) + '</div>';
+      });
+      html += '</div>';
+    }
+    
+    html += '<div class="disclaimer">';
+    html += '<p><strong>Disclaimers:</strong> This report is based on a visual inspection of accessible areas only. Hidden defects, latent issues, and items requiring specialist assessment may not be identified. Recommendations to engage licensed specialists should be followed. This report is prepared for the named client only and reliance by third parties is not authorised.</p>';
+    html += '<p>Generated by HBC OS · ' + new Date().toLocaleString('en-AU') + '</p>';
+    html += '</div>';
+    
+    html += '</body></html>';
+    
+    /* Open in new window/tab and trigger print → user selects "Save to PDF" or "Save to Files" */
+    const w = window.open('', '_blank');
+    if (!w) {
+      /* Pop-up blocked — try download as HTML instead */
+      const clientName = (c.name || 'Report').replace(/[^a-z0-9]/gi, '_');
+      const filename = 'HBC_Report_' + clientName + '_' + new Date().toISOString().slice(0,10) + '.html';
+      downloadFile(filename, 'text/html', html);
+      showToast('Saved as HTML — open in Safari to print to PDF', 'warn');
+      return;
+    }
+    w.document.write(html);
+    w.document.close();
+    setTimeout(function() {
+      try {
+        w.focus();
+        w.print();
+      } catch(e) {
+        console.warn('Print failed:', e);
+      }
+    }, 500);
+    haptic([10,30,10]);
+  } catch (err) {
+    console.error('PDF export failed:', err);
+    showToast('PDF failed: ' + err.message.slice(0,60), 'err');
+  }
+};
+
+/* =========================================================
+   6. EMAIL REPORT
+   ========================================================= */
+window.mbEmailReport = function() {
+  haptic(8);
+  const c = PROJECT.client || {};
+  const insp = INSPECTION_TYPES.find(function(t){return t.id===PROJECT.inspections.currentType;});
+  const subject = 'Inspection Report — ' + (c.address || c.name || 'Property');
+  const body = mbBuildReportText();
+  
+  /* Email body URL-encoded — split into chunks to handle mailto's URL length limit */
+  const maxBodyLen = 1900;
+  let truncatedBody = body;
+  let truncated = false;
+  if (body.length > maxBodyLen) {
+    truncatedBody = body.slice(0, maxBodyLen) + '\n\n[... full report continues — PDF attached separately]';
+    truncated = true;
+  }
+  
+  const mailtoLink = 'mailto:' + (c.email || '') + 
+    '?subject=' + encodeURIComponent(subject) + 
+    '&body=' + encodeURIComponent(truncatedBody);
+  
+  if (mailtoLink.length > 8000) {
+    /* Still too long — use a shorter teaser */
+    const teaser = 'Please find attached the inspection report for ' + (c.address || 'your property') + '.\n\nInspection type: ' + (insp ? insp.name : '—') + '\nDate: ' + new Date().toLocaleDateString('en-AU') + '\n\n[Full report attached as PDF]\n\nKind regards,\n' + ((PROJECT.settings && PROJECT.settings.inspectorName) || 'Building Inspector');
+    const short = 'mailto:' + (c.email || '') + '?subject=' + encodeURIComponent(subject) + '&body=' + encodeURIComponent(teaser);
+    window.location.href = short;
+    showToast('✓ Email opened (please attach PDF separately)', 'ok');
+  } else {
+    window.location.href = mailtoLink;
+    showToast(truncated ? '✓ Email opened (truncated, attach PDF)' : '✓ Email opened', 'ok');
+  }
+  haptic([10,30,10]);
+};
+
+/* =========================================================
+   7. BACKUP & SYNC PANEL — appears in Setup tab
+   ========================================================= */
+window.renderBackupPanel = function() {
+  let html = '<h3 style="margin:18px 0 8px;font-size:13px;text-transform:uppercase;letter-spacing:1px;color:#0D1B2A;font-weight:700">💾 Backup & Export</h3>';
+  
+  html += '<div class="mb-item-card" style="border-left-color:#0D1B2A">';
+  html += '<div class="mb-item-cat">📄 Export Report as PDF</div>';
+  html += '<div style="font-size:13px;color:#475569;margin-bottom:8px">Build a printable PDF of the current job — defects, photos, sections, limitations. Save to iPhone Files via the print sheet.</div>';
+  html += '<button class="mb-detail-btn primary" style="width:100%" onclick="mbExportReportPDF()">📄 Export PDF</button>';
+  html += '</div>';
+  
+  html += '<div class="mb-item-card" style="border-left-color:#16a34a">';
+  html += '<div class="mb-item-cat">📦 Export Whole Job as JSON</div>';
+  html += '<div style="font-size:13px;color:#475569;margin-bottom:8px">Save the current job — every photo, defect, note, attachment — as a single .json file you can back up or transfer to another device.</div>';
+  html += '<button class="mb-detail-btn primary" style="width:100%" onclick="mbExportJobJSON()">📦 Export Job</button>';
+  html += '</div>';
+  
+  html += '<div class="mb-item-card" style="border-left-color:#dc2626">';
+  html += '<div class="mb-item-cat">📥 Import Job from File</div>';
+  html += '<div style="font-size:13px;color:#475569;margin-bottom:8px">Restore a previously exported .json job. Creates a NEW job — doesn\'t overwrite your current one.</div>';
+  html += '<button class="mb-detail-btn primary" style="width:100%;background:#dc2626" onclick="mbImportJobJSON()">📥 Import Job</button>';
+  html += '</div>';
+  
+  html += '<div class="mb-item-card" style="border-left-color:#F05A28">';
+  html += '<div class="mb-item-cat">✉️ Email Report</div>';
+  html += '<div style="font-size:13px;color:#475569;margin-bottom:8px">Opens your Mail app with a draft email containing the report summary. Attach the PDF separately after exporting it.</div>';
+  html += '<button class="mb-detail-btn primary" style="width:100%" onclick="mbEmailReport()">✉️ Compose Email</button>';
+  html += '</div>';
+  
+  return html;
+};
+
+/* Inject backup panel into Setup tab */
+(function injectBackupPanel() {
+  const orig = window.renderMobileSetup;
+  if (typeof orig !== 'function') return;
+  window.renderMobileSetup = function() {
+    let html = orig.apply(this, arguments);
+    return html + renderBackupPanel();
+  };
+})();
+
+/* Also inject onto Job Dashboard */
+(function injectDashboardBackup() {
+  const orig = window.renderJobDashboard;
+  if (typeof orig !== 'function') return;
+  window.renderJobDashboard = function() {
+    let html = orig.apply(this, arguments);
+    /* Add a backup row near the bottom */
+    const block = '<h3 style="margin:18px 0 8px;font-size:13px;text-transform:uppercase;letter-spacing:1px;color:#0D1B2A;font-weight:700">💾 Export this job</h3>' +
+      '<div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:14px">' +
+        '<button class="mb-detail-btn primary" onclick="mbExportReportPDF()" style="padding:14px 10px;font-size:13px">📄 PDF</button>' +
+        '<button class="mb-detail-btn primary" onclick="mbExportJobJSON()" style="padding:14px 10px;font-size:13px;background:#16a34a">📦 JSON</button>' +
+        '<button class="mb-detail-btn primary" onclick="mbEmailReport()" style="padding:14px 10px;font-size:13px;background:#0D1B2A">✉️ Email</button>' +
+        '<button class="mb-detail-btn primary" onclick="mbImportJobJSON()" style="padding:14px 10px;font-size:13px;background:#dc2626">📥 Import</button>' +
+      '</div>';
+    return html + block;
+  };
+})();
+
+/* =========================================================
+   8. THREE-TAB ADD-DEFECT PICKER
+   ========================================================= */
+window.mbOpenAddDefectTabs = function() {
+  haptic(10);
+  if (typeof ensureLocations === 'function') ensureLocations();
+  const active = (PROJECT.locations && PROJECT.locations.active) || 'General';
+  window._mbQuickAdd = { severity: null, photos: [], location: active, description: '', tab: 'type' };
+  mbRenderAddDefectTabs();
+};
+
+window.mbRenderAddDefectTabs = function() {
+  const qa = window._mbQuickAdd || { tab: 'type' };
+  const tab = qa.tab || 'type';
+  
+  /* Tab buttons */
+  const tabBtn = function(id, label, active) {
+    return '<button onclick="mbSwitchDefectTab(\'' + id + '\')" style="flex:1;padding:10px 6px;font-size:12px;font-weight:700;background:' + (active ? '#0D1B2A' : '#f6f8fa') + ';color:' + (active ? '#fff' : '#475569') + ';border:none;border-bottom:' + (active ? '3px solid #F05A28' : '3px solid transparent') + ';cursor:pointer">' + label + '</button>';
+  };
+  
+  let html = '<div style="display:flex;border-radius:8px;overflow:hidden;margin-bottom:14px;border:1px solid #e5e7eb">';
+  html += tabBtn('type', '✍ Type freely', tab === 'type');
+  html += tabBtn('library', '📚 Library', tab === 'library');
+  html += tabBtn('ai', '🤖 AI Suggest', tab === 'ai');
+  html += '</div>';
+  
+  /* Location */
+  html += '<span class="mb-detail-label">Location</span>';
+  html += '<div style="display:flex;gap:6px;margin-bottom:10px">';
+  html += '<input id="mb-qa-loc" value="' + esc(qa.location || '') + '" class="mb-detail-input" style="flex:1;font-size:16px" onchange="window._mbQuickAdd.location=this.value">';
+  html += '<button class="mb-detail-btn" onclick="mbQAPickLoc()">📍</button>';
+  html += '</div>';
+  
+  /* Tab content */
+  if (tab === 'type') {
+    html += '<span class="mb-detail-label">Defect description</span>';
+    html += '<textarea id="mb-qa-desc" class="mb-detail-input" placeholder="Type or use voice…" style="font-size:16px;min-height:80px" onchange="window._mbQuickAdd.description=this.value">' + esc(qa.description || '') + '</textarea>';
+    html += '<div style="display:flex;gap:6px;margin-top:6px">';
+    html += '<button class="mb-detail-btn" style="flex:1" onclick="mbQuickAddVoice()">🎙 Voice</button>';
+    html += '</div>';
+  } else if (tab === 'library') {
+    const total = DEFECT_LIBRARY.reduce(function(s, c) { return s + c.issues.length; }, 0);
+    html += '<input type="search" id="mb-qalib-search" class="mb-detail-input" placeholder="🔍 Search ' + total + ' defects..." style="font-size:16px" oninput="mbRenderQALibInTabs()">';
+    html += '<div id="mb-qalib-list" style="margin-top:10px;max-height:340px;overflow-y:auto"></div>';
+  } else if (tab === 'ai') {
+    html += '<p style="font-size:12px;color:#64748b;margin-bottom:8px">Type 2-3 words about what you see, AI suggests the proper defect wording.</p>';
+    html += '<span class="mb-detail-label">Quick description (a few words)</span>';
+    html += '<input id="mb-qa-aiprompt" class="mb-detail-input" placeholder="e.g. ceiling crack near corner" style="font-size:16px">';
+    html += '<button class="mb-detail-btn primary" style="width:100%;margin-top:10px" onclick="mbAISuggestDefect()">🤖 Suggest</button>';
+    html += '<div id="mb-qa-aiout" style="margin-top:10px"></div>';
+  }
+  
+  /* Severity */
+  html += '<span class="mb-detail-label" style="margin-top:14px">Severity</span>';
+  html += '<div class="mb-sev-row">';
+  for (let n = 1; n <= 5; n++) {
+    html += '<button id="mb-qa-sev-' + n + '" class="sev-' + n + (qa.severity === n ? ' active' : '') + '" onclick="mbQuickAddSetSev(' + n + ')">' + n + '</button>';
+  }
+  html += '</div>';
+  
+  /* Photos */
+  html += '<span class="mb-detail-label">Photos (' + (qa.photos ? qa.photos.length : 0) + ')</span>';
+  html += '<div style="display:flex;gap:6px">';
+  html += '<button class="mb-detail-btn" style="flex:1" onclick="mbQuickAddPhoto(\'camera\')">📷 Camera</button>';
+  html += '<button class="mb-detail-btn" style="flex:1" onclick="mbQuickAddPhoto(\'gallery\')">🖼 Gallery</button>';
+  html += '</div>';
+  
+  /* Save */
+  html += '<div class="mb-detail-actions" style="margin-top:18px">';
+  html += '<button class="mb-detail-btn" onclick="mbCloseSheet()">Cancel</button>';
+  html += '<button class="mb-detail-btn primary" onclick="mbQuickAddSave()">✓ Save Defect</button>';
+  html += '</div>';
+  
+  mbBottomSheet('Add Defect', html);
+  if (tab === 'library') setTimeout(mbRenderQALibInTabs, 50);
+};
+
+window.mbSwitchDefectTab = function(tabId) {
+  if (!window._mbQuickAdd) window._mbQuickAdd = {tab: tabId};
+  /* Persist what's in the current text inputs */
+  const ta = document.getElementById('mb-qa-desc');
+  if (ta) window._mbQuickAdd.description = ta.value;
+  const loc = document.getElementById('mb-qa-loc');
+  if (loc) window._mbQuickAdd.location = loc.value;
+  window._mbQuickAdd.tab = tabId;
+  haptic(8);
+  mbRenderAddDefectTabs();
+};
+
+window.mbRenderQALibInTabs = function() {
+  const q = ((document.getElementById('mb-qalib-search') || {}).value || '').toLowerCase().trim();
+  let items = [];
+  DEFECT_LIBRARY.forEach(function(cat, ci) {
+    cat.issues.forEach(function(it, ii) {
+      if (q && !it.desc.toLowerCase().includes(q) && !cat.cat.toLowerCase().includes(q)) return;
+      items.push({cat: cat.cat, ci: ci, ii: ii, desc: it.desc, ref: it.ref || '', sev: it.sev || '', sevNum: parseInt(it.sev) || 0});
+    });
+  });
+  items.sort(function(a, b) { return b.sevNum - a.sevNum; });
+  items = items.slice(0, 80);
+  const div = document.getElementById('mb-qalib-list');
+  if (!div) return;
+  if (!items.length) { div.innerHTML = '<p style="color:#94a3b8;text-align:center;padding:20px">No matches — try different keywords</p>'; return; }
+  div.innerHTML = items.map(function(d) {
+    const sevColor = d.sevNum >= 5 ? '#dc2626' : d.sevNum >= 4 ? '#ea580c' : d.sevNum >= 3 ? '#d97706' : d.sevNum >= 2 ? '#65a30d' : '#6b7280';
+    const short = d.desc.length > 200 ? d.desc.slice(0, 200) + '…' : d.desc;
+    return '<div onclick="mbQuickAddPickFromLib(' + d.ci + ',' + d.ii + ')" style="padding:10px;background:#fff;border:1.5px solid #e5e7eb;border-left:4px solid ' + sevColor + ';border-radius:8px;margin-bottom:6px;cursor:pointer">' +
+      '<div style="font-size:10px;color:' + sevColor + ';font-weight:700;text-transform:uppercase;margin-bottom:3px">⬤ Sev ' + esc(d.sev) + ' · ' + esc(d.cat) + '</div>' +
+      '<div style="font-size:12px;color:#0D1B2A;line-height:1.4">' + esc(short) + '</div>' +
+    '</div>';
+  }).join('');
+};
+
+window.mbAISuggestDefect = async function() {
+  const inp = document.getElementById('mb-qa-aiprompt');
+  const q = inp ? inp.value.trim() : '';
+  if (!q) { showToast('Type a few words first', 'warn'); return; }
+  
+  const out = document.getElementById('mb-qa-aiout');
+  if (out) out.innerHTML = '<p style="color:#64748b;padding:10px;text-align:center">🤖 Thinking...</p>';
+  
+  const provider = typeof getProviderForFeature === 'function' ? getProviderForFeature('defectWriting') : null;
+  if (!provider) {
+    if (out) out.innerHTML = '<p style="color:#dc2626;padding:10px">No AI configured. Setup → Test AI.</p>';
+    return;
+  }
+  
+  const insp = INSPECTION_TYPES.find(function(t){return t.id===PROJECT.inspections.currentType;});
+  const inspName = insp ? insp.name : 'building inspection';
+  
+  const prompt = 'You are an Australian building inspector during a ' + inspName + '. The inspector saw this and made a quick note:\n\n"' + q + '"\n\nWrite the proper defect entry. Format: [observation with extent/measurement]. Reference: [most relevant AS or NCC clause]. [implication using "may indicate" / "consistent with"]. Recommendation: [specialist] to [purpose].\n\nRules: 200-400 chars total, "observed" pattern, no absolutes, Australian English. Also suggest severity 1-5. Format your response as:\n\nDEFECT: [the wording]\nSEVERITY: [number]';
+  
+  try {
+    const result = await callAI(provider, prompt, { maxTokens: 500 });
+    const defMatch = result.match(/DEFECT:\s*([\s\S]*?)(?:\n\nSEVERITY|\nSEVERITY|$)/i);
+    const sevMatch = result.match(/SEVERITY:\s*(\d)/i);
+    const defText = defMatch ? defMatch[1].trim() : result;
+    const sevNum = sevMatch ? parseInt(sevMatch[1]) : 3;
+    
+    if (out) {
+      const safe = defText.replace(/'/g, "\\'").replace(/\n/g, '\\n');
+      out.innerHTML = '<div style="background:#f0f9ff;padding:10px;border-radius:8px;border-left:4px solid #0D1B2A;margin-top:10px">' +
+        '<div style="font-size:10px;font-weight:700;color:#0D1B2A;text-transform:uppercase;margin-bottom:6px">Suggested · Severity ' + sevNum + '</div>' +
+        '<div style="font-size:13px;line-height:1.5;color:#0D1B2A">' + esc(defText) + '</div>' +
+        '<div style="display:flex;gap:6px;margin-top:10px">' +
+          '<button class="mb-detail-btn primary" style="flex:1" onclick="mbQuickAddAcceptAI(\'' + safe + '\',' + sevNum + ')">✓ Use this</button>' +
+          '<button class="mb-detail-btn" onclick="mbAISuggestDefect()">🔄 Try again</button>' +
+        '</div>' +
+      '</div>';
+    }
+  } catch (err) {
+    if (out) out.innerHTML = '<p style="color:#dc2626;padding:10px;font-size:11px">AI failed: ' + esc(err.message.slice(0,200)) + '</p>';
+  }
+};
+
+window.mbQuickAddAcceptAI = function(text, sev) {
+  if (!window._mbQuickAdd) window._mbQuickAdd = {photos:[]};
+  window._mbQuickAdd.description = text.replace(/\\n/g, '\n');
+  window._mbQuickAdd.severity = sev;
+  window._mbQuickAdd.tab = 'type';
+  window._mbQuickAdd.aiGenerated = true;
+  mbRenderAddDefectTabs();
+};
+
+/* Re-wire orange FAB to open the new tabs picker */
+(function rewireFAB() {
+  const wire = function() {
+    const fab = document.getElementById('mb-fab');
+    if (!fab) return;
+    fab.onclick = function() { haptic(10); mbOpenAddDefectTabs(); };
+  };
+  /* Re-wire periodically since FAB may be re-rendered */
+  setTimeout(wire, 500);
+  setInterval(wire, 2000);
+})();
+
+console.log('[Phase L part 2] Backup features + three-tab defect picker loaded');
 
 
 </script>
