@@ -2,6 +2,9 @@
 <html lang="en-AU">
 <head>
 <meta charset="utf-8">
+<meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
+<meta http-equiv="Pragma" content="no-cache">
+<meta http-equiv="Expires" content="0">
 <meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=5,viewport-fit=cover">
 <title>HBC OS V20-PWA — Building Consultant</title>
 
@@ -5896,10 +5899,16 @@ document.head.appendChild(__toastStyle);
 let __swReg = null;
 if ('serviceWorker' in navigator && location.protocol !== 'file:') {
   window.addEventListener('load', () => {
-    navigator.serviceWorker.register('sw.js', { scope: './' })
+    navigator.serviceWorker.register('sw.js', { scope: './', updateViaCache: 'none' })
       .then(reg => {
         __swReg = reg;
         console.log('[SW] Registered, scope:', reg.scope);
+
+        /* Force an update check every time the page loads */
+        reg.update().catch(() => {});
+
+        /* Periodic update check (every 60 seconds while app is open) */
+        setInterval(() => { reg.update().catch(() => {}); }, 60000);
 
         /* Listen for updates */
         reg.addEventListener('updatefound', () => {
