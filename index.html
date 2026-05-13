@@ -19690,6 +19690,1014 @@ window.mbQuickAddAcceptAI = function(text, sev) {
 console.log('[Phase L part 2] Backup features + three-tab defect picker loaded');
 
 
+
+/* ============================================================
+   PHASE M — VIEW MODE TOGGLE (V32)
+   Lets you force Desktop view on mobile (to access consulting side)
+   or Mobile view on desktop (testing). Persists across sessions.
+   ============================================================ */
+
+window.HBC_VIEW_MODE_KEY = 'HBC_VIEW_MODE';
+
+/* Read view preference: 'mobile' | 'desktop' | 'auto' (default) */
+window.getViewMode = function() {
+  try { return localStorage.getItem(HBC_VIEW_MODE_KEY) || 'auto'; } catch(e) { return 'auto'; }
+};
+
+window.setViewMode = function(mode) {
+  try { localStorage.setItem(HBC_VIEW_MODE_KEY, mode); } catch(e) {}
+  applyViewMode();
+};
+
+/* Apply the current preference to the DOM */
+window.applyViewMode = function() {
+  const mode = getViewMode();
+  
+  if (mode === 'desktop') {
+    /* Force desktop view */
+    document.body.classList.remove('mobile-mode');
+    /* Re-show desktop chrome that the interval hider keeps killing */
+    const hdr = document.querySelector('header.hdr');
+    if (hdr) hdr.style.display = '';
+    const tabs = document.getElementById('tabs');
+    if (tabs) tabs.style.display = '';
+    const toolbar = document.querySelector('.toolbar');
+    if (toolbar) toolbar.style.display = '';
+    const stagebar = document.getElementById('stagebar');
+    if (stagebar) stagebar.style.display = '';
+    /* Re-show pages */
+    const pagesDiv = document.getElementById('pages');
+    if (pagesDiv) {
+      const sects = pagesDiv.querySelectorAll('section.page');
+      sects.forEach(s => { s.style.display = ''; });
+    }
+  } else if (mode === 'mobile') {
+    /* Force mobile view */
+    document.body.classList.add('mobile-mode');
+  } else {
+    /* Auto — let the original detector decide */
+    if (typeof isMobileView === 'function' && isMobileView()) {
+      document.body.classList.add('mobile-mode');
+    } else {
+      document.body.classList.remove('mobile-mode');
+    }
+  }
+  
+  /* Re-render */
+  if (typeof renderPages === 'function') {
+    try { renderPages(); } catch(e) { console.warn(e); }
+  }
+  if (typeof renderMobilePage === 'function' && document.body.classList.contains('mobile-mode')) {
+    try { renderMobilePage(); } catch(e) { console.warn(e); }
+  }
+};
+
+/* Override enableMobileMode to respect user preference */
+const _origEnableMobile = window.enableMobileMode;
+window.enableMobileMode = function() {
+  const mode = getViewMode();
+  if (mode === 'desktop') {
+    document.body.classList.remove('mobile-mode');
+    return false;
+  }
+  if (mode === 'mobile') {
+    document.body.classList.add('mobile-mode');
+    return true;
+  }
+  /* auto */
+  if (typeof _origEnableMobile === 'function') return _origEnableMobile();
+  if (typeof isMobileView === 'function') {
+    if (isMobileView()) {
+      document.body.classList.add('mobile-mode');
+      return true;
+    } else {
+      document.body.classList.remove('mobile-mode');
+      return false;
+    }
+  }
+  return false;
+};
+
+/* Apply on load */
+setTimeout(applyViewMode, 50);
+window.addEventListener('load', () => setTimeout(applyViewMode, 200));
+
+/* ============================================================
+   TOGGLE BUTTON — Always visible in BOTH desktop and mobile
+   ============================================================ */
+
+(function injectViewToggleButton() {
+  const inject = function() {
+    if (document.getElementById('viewModeToggle')) return; /* already there */
+    
+    const btn = document.createElement('button');
+    btn.id = 'viewModeToggle';
+    btn.style.cssText = 'position:fixed;top:8px;right:8px;z-index:99998;background:#0D1B2A;color:#fff;border:2px solid #F05A28;border-radius:24px;padding:8px 14px;font-size:12px;font-weight:700;cursor:pointer;box-shadow:0 4px 12px rgba(0,0,0,.25);display:flex;align-items:center;gap:6px';
+    
+    const updateLabel = () => {
+      const mode = getViewMode();
+      const isMobile = document.body.classList.contains('mobile-mode');
+      if (isMobile) {
+        btn.innerHTML = '🖥 Desktop';
+        btn.title = 'Switch to desktop view — access full consulting workflow';
+      } else {
+        btn.innerHTML = '📱 Mobile';
+        btn.title = 'Switch to mobile inspection view';
+      }
+    };
+    
+    btn.onclick = function() {
+      const isMobile = document.body.classList.contains('mobile-mode');
+      if (isMobile) {
+        setViewMode('desktop');
+        if (typeof showToast === 'function') showToast('🖥 Desktop view — pinch zoom to navigate', 'ok');
+      } else {
+        setViewMode('mobile');
+        if (typeof showToast === 'function') showToast('📱 Mobile view active', 'ok');
+      }
+      setTimeout(updateLabel, 100);
+    };
+    
+    document.body.appendChild(btn);
+    updateLabel();
+    
+    /* Keep label in sync if mode is changed elsewhere */
+    setInterval(updateLabel, 1000);
+  };
+  
+  if (document.readyState === 'complete' || document.readyState === 'interactive') {
+    setTimeout(inject, 100);
+  } else {
+    window.addEventListener('load', () => setTimeout(inject, 100));
+  }
+})();
+
+/* ============================================================
+   DESKTOP VIEW HELP BANNER on first switch
+   ============================================================ */
+window.showDesktopViewHelp = function() {
+  if (localStorage.getItem('HBC_DESKTOP_HELP_SHOWN') === 'yes') return;
+  
+  const banner = document.createElement('div');
+  banner.id = 'desktopHelpBanner';
+  banner.style.cssText = 'position:fixed;top:60px;left:8px;right:8px;z-index:99997;background:#fff7ed;border:2px solid #F05A28;border-radius:12px;padding:14px;box-shadow:0 4px 16px rgba(0,0,0,.2);font-size:13px;line-height:1.5;color:#0D1B2A';
+  banner.innerHTML = 
+    '<div style="display:flex;align-items:start;gap:10px">' +
+      '<div style="flex:1">' +
+        '<strong style="color:#F05A28">🖥 Desktop view — Building Consultant workflow</strong><br>' +
+        'All 17 consulting tabs are now visible:<br>' +
+        '<span style="font-size:11px;color:#64748b">Settings · Client · Professionals · Documents+AI · Forms · Permit Assessment · Architectural · Siting · Structural · Fire · Pool · Compliance · Mentor · RFI · Final Report · Knowledge · Inspections</span><br><br>' +
+        '<strong>Tips for using on phone:</strong><br>' +
+        '• Pinch with two fingers to zoom in<br>' +
+        '• Scroll horizontally on the tab bar<br>' +
+        '• Rotate phone sideways for more width<br>' +
+        '• Tap 📱 Mobile (top right) to switch back<br>' +
+      '</div>' +
+      '<button onclick="document.getElementById(\'desktopHelpBanner\').remove();localStorage.setItem(\'HBC_DESKTOP_HELP_SHOWN\',\'yes\')" style="background:#F05A28;color:#fff;border:none;border-radius:50%;width:28px;height:28px;font-size:14px;font-weight:700;cursor:pointer;flex-shrink:0">✕</button>' +
+    '</div>';
+  document.body.appendChild(banner);
+  
+  /* Auto-dismiss after 20 sec */
+  setTimeout(() => {
+    if (banner.parentElement) banner.remove();
+    localStorage.setItem('HBC_DESKTOP_HELP_SHOWN','yes');
+  }, 20000);
+};
+
+/* Hook into setViewMode to show help on first desktop switch */
+const _origSetViewMode = window.setViewMode;
+window.setViewMode = function(mode) {
+  _origSetViewMode(mode);
+  if (mode === 'desktop') {
+    setTimeout(showDesktopViewHelp, 500);
+  }
+};
+
+/* ============================================================
+   ADD VIEW MODE CARD TO MOBILE SETUP TAB
+   ============================================================ */
+(function addViewToSetup() {
+  const orig = window.renderMobileSetup;
+  if (typeof orig !== 'function') return;
+  window.renderMobileSetup = function() {
+    let html = orig.apply(this, arguments);
+    const mode = getViewMode();
+    const block = '<div class="mb-item-card" style="border-left-color:#0D1B2A">' +
+      '<div class="mb-item-cat">🖥 View Mode</div>' +
+      '<div style="font-size:13px;color:#475569;margin-bottom:8px">' +
+        'Switch between Mobile (inspection workflow) and Desktop (full Building Consultant — permit assessment, RFI engine, documents, professionals, compliance — all 17 tabs).' +
+      '</div>' +
+      '<div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:6px;margin-bottom:6px">' +
+        '<button class="mb-detail-btn ' + (mode==='mobile'?'primary':'') + '" onclick="setViewMode(\'mobile\')">📱 Mobile</button>' +
+        '<button class="mb-detail-btn ' + (mode==='desktop'?'primary':'') + '" onclick="setViewMode(\'desktop\')">🖥 Desktop</button>' +
+        '<button class="mb-detail-btn ' + (mode==='auto'?'primary':'') + '" onclick="setViewMode(\'auto\')">🔄 Auto</button>' +
+      '</div>' +
+      '<p style="font-size:11px;color:#94a3b8;margin:0">Current: <strong>' + mode + '</strong>. Saved across sessions. Auto = use mobile on phone, desktop on PC.</p>' +
+    '</div>';
+    return html + block;
+  };
+})();
+
+console.log('[Phase M] View mode toggle loaded — Desktop view accessible on phone');
+
+
+
+/* ============================================================
+   PHASE N — DESKTOP-ON-PHONE OPTIMISATIONS (V33, Path B)
+   • Mobile-friendly CSS for desktop view on phone
+   • Floating tab-jump drawer
+   • Zoom controls (90/100/110/125/150)
+   • Floating action bar with shortcuts
+   ============================================================ */
+
+/* ---------- 1. MOBILE-FRIENDLY DESKTOP CSS ---------- */
+(function injectDesktopMobileCss() {
+  if (document.getElementById('hbc-phase-n-css')) return;
+  const css = document.createElement('style');
+  css.id = 'hbc-phase-n-css';
+  css.textContent = `
+/* When desktop view forced on phone */
+@media (max-width: 768px) {
+  body:not(.mobile-mode) { font-size: 14px !important; }
+  body:not(.mobile-mode) header.hdr {
+    padding: 8px 12px !important;
+    flex-wrap: wrap !important;
+    gap: 6px !important;
+  }
+  body:not(.mobile-mode) header.hdr h1 {
+    font-size: 15px !important;
+    line-height: 1.2 !important;
+  }
+  body:not(.mobile-mode) header.hdr .pill {
+    font-size: 9px !important;
+    padding: 2px 5px !important;
+  }
+  body:not(.mobile-mode) nav.tabs {
+    padding: 0 8px !important;
+    position: sticky !important;
+    top: 0 !important;
+    flex-wrap: nowrap !important;
+    overflow-x: scroll !important;
+    -webkit-overflow-scrolling: touch !important;
+  }
+  body:not(.mobile-mode) nav.tabs::-webkit-scrollbar { display: none !important; }
+  body:not(.mobile-mode) nav.tabs button {
+    flex-shrink: 0 !important;
+    white-space: nowrap !important;
+    padding: 12px 14px !important;
+    font-size: 12px !important;
+    min-height: 44px !important;
+  }
+  body:not(.mobile-mode) .toolbar {
+    flex-wrap: wrap !important;
+    padding: 8px !important;
+    gap: 6px !important;
+  }
+  body:not(.mobile-mode) .toolbar button,
+  body:not(.mobile-mode) .toolbar .btn {
+    flex: 1 1 calc(50% - 6px) !important;
+    font-size: 12px !important;
+    padding: 10px 8px !important;
+    min-height: 40px !important;
+  }
+  body:not(.mobile-mode) section.page {
+    padding: 12px 8px 100px 8px !important;
+  }
+  body:not(.mobile-mode) .card,
+  body:not(.mobile-mode) .panel {
+    padding: 12px !important;
+    margin-bottom: 10px !important;
+  }
+  body:not(.mobile-mode) .grid,
+  body:not(.mobile-mode) .grid2,
+  body:not(.mobile-mode) .grid3,
+  body:not(.mobile-mode) .grid4,
+  body:not(.mobile-mode) .g2,
+  body:not(.mobile-mode) .g3,
+  body:not(.mobile-mode) .g4 {
+    display: block !important;
+  }
+  body:not(.mobile-mode) .grid > *,
+  body:not(.mobile-mode) .g2 > *,
+  body:not(.mobile-mode) .g3 > *,
+  body:not(.mobile-mode) .g4 > * {
+    margin-bottom: 8px !important;
+  }
+  body:not(.mobile-mode) .field {
+    margin-bottom: 10px !important;
+  }
+  body:not(.mobile-mode) .field label {
+    font-size: 11px !important;
+    margin-bottom: 4px !important;
+    display: block !important;
+  }
+  body:not(.mobile-mode) .field input,
+  body:not(.mobile-mode) .field select,
+  body:not(.mobile-mode) .field textarea,
+  body:not(.mobile-mode) input[type="text"],
+  body:not(.mobile-mode) input[type="number"],
+  body:not(.mobile-mode) input[type="email"],
+  body:not(.mobile-mode) input[type="date"],
+  body:not(.mobile-mode) input[type="search"],
+  body:not(.mobile-mode) select,
+  body:not(.mobile-mode) textarea {
+    font-size: 16px !important;
+    padding: 10px !important;
+    min-height: 40px !important;
+    width: 100% !important;
+    box-sizing: border-box !important;
+  }
+  body:not(.mobile-mode) table {
+    font-size: 11px !important;
+    width: 100% !important;
+    table-layout: auto !important;
+  }
+  body:not(.mobile-mode) table th,
+  body:not(.mobile-mode) table td {
+    padding: 6px 4px !important;
+    word-break: break-word !important;
+  }
+  body:not(.mobile-mode) table th:nth-child(n+5),
+  body:not(.mobile-mode) table td:nth-child(n+5) {
+    display: none !important;
+  }
+  body:not(.mobile-mode) button,
+  body:not(.mobile-mode) .btn {
+    min-height: 40px !important;
+    font-size: 13px !important;
+  }
+  body:not(.mobile-mode) .stagebar {
+    overflow-x: scroll !important;
+    flex-wrap: nowrap !important;
+    padding: 6px 8px !important;
+  }
+  body:not(.mobile-mode) .stagebar::-webkit-scrollbar { display: none !important; }
+  body:not(.mobile-mode) .stagebar button {
+    flex-shrink: 0 !important;
+    padding: 8px 12px !important;
+    font-size: 12px !important;
+  }
+  body:not(.mobile-mode) select {
+    appearance: menulist !important;
+    -webkit-appearance: menulist !important;
+  }
+  body:not(.mobile-mode) #syncStatus { display: none !important; }
+}
+
+/* Zoom level classes */
+body.hbc-zoom-90 { font-size: 13px !important; }
+body.hbc-zoom-100 { font-size: 14px !important; }
+body.hbc-zoom-110 { font-size: 15.5px !important; }
+body.hbc-zoom-125 { font-size: 17.5px !important; }
+body.hbc-zoom-150 { font-size: 21px !important; }
+
+/* Floating action bar — appears only when in desktop view on small screens */
+#hbcFloatBar {
+  position: fixed;
+  bottom: 12px;
+  left: 12px;
+  right: 12px;
+  z-index: 99997;
+  display: none;
+  gap: 6px;
+  padding: 8px;
+  background: rgba(13,27,42,.96);
+  border-radius: 14px;
+  box-shadow: 0 8px 24px rgba(0,0,0,.35);
+  backdrop-filter: blur(8px);
+  -webkit-backdrop-filter: blur(8px);
+}
+@media (max-width: 768px) {
+  body:not(.mobile-mode) #hbcFloatBar { display: flex !important; }
+}
+#hbcFloatBar button {
+  flex: 1;
+  background: #1e293b;
+  color: #fff;
+  border: 1px solid rgba(255,255,255,.1);
+  border-radius: 8px;
+  padding: 8px 4px;
+  font-size: 10px;
+  font-weight: 700;
+  cursor: pointer;
+  min-height: 44px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 2px;
+  -webkit-tap-highlight-color: transparent;
+}
+#hbcFloatBar button:active { background: #334155; }
+#hbcFloatBar button .icon { font-size: 16px; line-height: 1; }
+
+/* Tab jump drawer */
+#hbcTabDrawer {
+  position: fixed;
+  top: 0; left: 0; right: 0; bottom: 0;
+  z-index: 99999;
+  background: rgba(0,0,0,.65);
+  display: none;
+  align-items: flex-end;
+  justify-content: center;
+}
+#hbcTabDrawer.open { display: flex; }
+#hbcTabDrawer .drawer-content {
+  background: #fff;
+  width: 100%;
+  max-height: 80vh;
+  border-radius: 18px 18px 0 0;
+  overflow-y: auto;
+  padding: 14px;
+}
+#hbcTabDrawer .drawer-header {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding-bottom: 12px;
+  border-bottom: 1px solid #e5e7eb;
+  margin-bottom: 12px;
+}
+#hbcTabDrawer .drawer-header h3 {
+  flex: 1;
+  margin: 0;
+  font-size: 16px;
+  color: #0D1B2A;
+  font-weight: 700;
+}
+#hbcTabDrawer .tab-grid {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 6px;
+}
+#hbcTabDrawer .tab-item {
+  background: #f6f8fa;
+  border: 1.5px solid transparent;
+  border-radius: 10px;
+  padding: 14px 12px;
+  text-align: left;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-height: 56px;
+  width: 100%;
+  font-family: inherit;
+}
+#hbcTabDrawer .tab-item:active { background: #e2e8f0; }
+#hbcTabDrawer .tab-item.active { background: #FFF7ED; border-color: #F05A28; }
+#hbcTabDrawer .tab-item .num {
+  background: #0D1B2A;
+  color: #fff;
+  width: 30px; height: 30px;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 12px;
+  font-weight: 700;
+  flex-shrink: 0;
+}
+#hbcTabDrawer .tab-item.active .num { background: #F05A28; }
+#hbcTabDrawer .tab-item .label {
+  flex: 1;
+  font-size: 13px;
+  font-weight: 600;
+  color: #0D1B2A;
+  line-height: 1.3;
+  text-align: left;
+}
+
+/* Zoom indicator */
+#hbcZoomChip {
+  position: fixed;
+  top: 56px;
+  right: 8px;
+  background: rgba(13,27,42,.9);
+  color: #fff;
+  font-size: 11px;
+  font-weight: 700;
+  padding: 4px 10px;
+  border-radius: 12px;
+  z-index: 99996;
+  display: none;
+  pointer-events: none;
+}
+#hbcZoomChip.show {
+  display: block;
+  animation: zoomChipShow 1.5s ease-out forwards;
+}
+@keyframes zoomChipShow {
+  0% { opacity: 0; transform: scale(.85); }
+  15% { opacity: 1; transform: scale(1); }
+  85% { opacity: 1; transform: scale(1); }
+  100% { opacity: 0; transform: scale(.95); }
+}
+  `;
+  document.head.appendChild(css);
+})();
+
+/* ---------- 2. ZOOM CONTROLS ---------- */
+window.HBC_ZOOM_LEVELS = [90, 100, 110, 125, 150];
+
+window.getCurrentZoom = function() {
+  try { return parseInt(localStorage.getItem('HBC_ZOOM_LEVEL')) || 100; } catch(e) { return 100; }
+};
+
+window.setZoom = function(zoom) {
+  try { localStorage.setItem('HBC_ZOOM_LEVEL', String(zoom)); } catch(e) {}
+  HBC_ZOOM_LEVELS.forEach(z => document.body.classList.remove('hbc-zoom-' + z));
+  document.body.classList.add('hbc-zoom-' + zoom);
+  /* Briefly show indicator */
+  let chip = document.getElementById('hbcZoomChip');
+  if (!chip) {
+    chip = document.createElement('div');
+    chip.id = 'hbcZoomChip';
+    document.body.appendChild(chip);
+  }
+  chip.textContent = '🔍 ' + zoom + '%';
+  chip.classList.remove('show');
+  void chip.offsetWidth;
+  chip.classList.add('show');
+};
+
+window.zoomIn = function() {
+  if (typeof haptic === 'function') haptic(8);
+  const cur = getCurrentZoom();
+  const i = HBC_ZOOM_LEVELS.indexOf(cur);
+  if (i < HBC_ZOOM_LEVELS.length - 1) setZoom(HBC_ZOOM_LEVELS[i + 1]);
+};
+
+window.zoomOut = function() {
+  if (typeof haptic === 'function') haptic(8);
+  const cur = getCurrentZoom();
+  const i = HBC_ZOOM_LEVELS.indexOf(cur);
+  if (i > 0) setZoom(HBC_ZOOM_LEVELS[i - 1]);
+};
+
+window.resetZoom = function() {
+  if (typeof haptic === 'function') haptic(8);
+  setZoom(100);
+};
+
+/* Apply saved zoom on load */
+setTimeout(() => { setZoom(getCurrentZoom()); }, 100);
+
+/* ---------- 3. TAB JUMP DRAWER ---------- */
+window.HBC_TABS_LIST = [
+  { id: 0, num: '1', label: 'Settings + AI' },
+  { id: 1, num: '2', label: 'Client Enquiry' },
+  { id: 2, num: '3', label: 'Professionals & Authorities' },
+  { id: 3, num: '4', label: 'Documents + AI Upload' },
+  { id: 4, num: '5', label: 'Forms + Certificates' },
+  { id: 5, num: '6', label: 'Admin Permit Assessment' },
+  { id: 6, num: '7', label: 'Architectural Assessment' },
+  { id: 7, num: '8', label: 'Siting + Report & Consent' },
+  { id: 8, num: '9', label: 'Structural / Engineering' },
+  { id: 9, num: '10', label: 'Fire + Accessibility' },
+  { id: 10, num: '11', label: 'Liveable + Pool + SLHC' },
+  { id: 11, num: '12', label: 'Compliance Documents' },
+  { id: 12, num: '13', label: 'AI Mentor + Live Chat' },
+  { id: 13, num: '14', label: 'RFI Engine' },
+  { id: 14, num: '15', label: 'Final Report' },
+  { id: 15, num: '16', label: 'Knowledge Base' },
+  { id: 16, num: '17', label: 'Building Inspections' }
+];
+
+window.openTabDrawer = function() {
+  if (typeof haptic === 'function') haptic(8);
+  let drawer = document.getElementById('hbcTabDrawer');
+  if (!drawer) {
+    drawer = document.createElement('div');
+    drawer.id = 'hbcTabDrawer';
+    drawer.onclick = function(e) {
+      if (e.target === drawer) drawer.classList.remove('open');
+    };
+    document.body.appendChild(drawer);
+  }
+  
+  const currentTab = (typeof CURRENT_TAB !== 'undefined') ? CURRENT_TAB : 0;
+  
+  let html = '<div class="drawer-content" onclick="event.stopPropagation()">';
+  html += '<div class="drawer-header">';
+  html += '<h3>📂 Jump to tab</h3>';
+  html += '<button onclick="closeTabDrawer()" style="background:#fee2e2;color:#991b1b;border:none;border-radius:6px;padding:8px 14px;font-size:13px;font-weight:700;cursor:pointer">✕ Close</button>';
+  html += '</div>';
+  html += '<p style="font-size:11px;color:#64748b;margin:0 0 10px">Tap any tab to jump there. All 17 Building Consultant workflows.</p>';
+  html += '<div class="tab-grid">';
+  HBC_TABS_LIST.forEach(t => {
+    const isActive = t.id === currentTab;
+    html += '<button class="tab-item ' + (isActive ? 'active' : '') + '" onclick="jumpToTab(' + t.id + ')">';
+    html += '<span class="num">' + t.num + '</span>';
+    html += '<span class="label">' + t.label + '</span>';
+    if (isActive) html += '<span style="color:#F05A28;font-weight:700;font-size:12px">CURRENT</span>';
+    html += '</button>';
+  });
+  html += '</div>';
+  html += '</div>';
+  
+  drawer.innerHTML = html;
+  drawer.classList.add('open');
+};
+
+window.closeTabDrawer = function() {
+  const d = document.getElementById('hbcTabDrawer');
+  if (d) d.classList.remove('open');
+};
+
+window.jumpToTab = function(tabId) {
+  if (typeof haptic === 'function') haptic([8, 30, 8]);
+  if (typeof goTab === 'function') {
+    try { goTab(tabId); } catch(e) { console.warn(e); }
+  }
+  closeTabDrawer();
+  window.scrollTo({ top: 0, behavior: 'smooth' });
+};
+
+/* ---------- 4. FLOATING ACTION BAR ---------- */
+(function injectFloatingBar() {
+  const inject = function() {
+    if (document.getElementById('hbcFloatBar')) return;
+    const bar = document.createElement('div');
+    bar.id = 'hbcFloatBar';
+    bar.innerHTML = 
+      '<button onclick="openTabDrawer()" title="Jump to tab"><span class="icon">📂</span><span>Tabs</span></button>' +
+      '<button onclick="zoomOut()" title="Zoom out"><span class="icon">🔍−</span><span>Smaller</span></button>' +
+      '<button onclick="resetZoom()" title="Reset zoom"><span class="icon">100%</span><span>Reset</span></button>' +
+      '<button onclick="zoomIn()" title="Zoom in"><span class="icon">🔍+</span><span>Bigger</span></button>' +
+      '<button onclick="setViewMode(\'mobile\')" title="Switch to mobile"><span class="icon">📱</span><span>Mobile</span></button>';
+    document.body.appendChild(bar);
+  };
+  if (document.readyState === 'complete' || document.readyState === 'interactive') {
+    setTimeout(inject, 200);
+  } else {
+    window.addEventListener('load', () => setTimeout(inject, 200));
+  }
+})();
+
+/* ---------- 5. SWIPE GESTURE: edge swipe to open tab drawer ---------- */
+(function enableSwipeForTabs() {
+  let touchStartX = 0;
+  let touchStartTime = 0;
+  document.addEventListener('touchstart', function(e) {
+    if (document.body.classList.contains('mobile-mode')) return;
+    if (window.innerWidth > 768) return;
+    if (!e.touches || !e.touches[0]) return;
+    touchStartX = e.touches[0].clientX;
+    touchStartTime = Date.now();
+  }, { passive: true });
+  
+  document.addEventListener('touchend', function(e) {
+    if (document.body.classList.contains('mobile-mode')) return;
+    if (window.innerWidth > 768) return;
+    if (!e.changedTouches || !e.changedTouches[0]) return;
+    const dt = Date.now() - touchStartTime;
+    if (dt > 400) return;
+    const dx = e.changedTouches[0].clientX - touchStartX;
+    /* Right-edge swipe (started near right edge, swiped left) opens tab drawer */
+    if (touchStartX > window.innerWidth - 30 && dx < -60) {
+      openTabDrawer();
+    }
+  }, { passive: true });
+})();
+
+console.log('[Phase N] Path B — desktop on phone optimisations loaded');
+
+
+
+/* ============================================================
+   PHASE N PART A — MOBILE-NATIVE DOCUMENTS + AI (V33)
+   First Building Consultant tab rebuilt as proper mobile screen
+   ============================================================ */
+
+window.HBC_DOC_TYPES = [
+  { value: 'Architectural Drawings', icon: '📐', desc: 'Floor plans, elevations, sections' },
+  { value: 'Structural Drawings', icon: '🏗️', desc: 'Structural plans, footings, framing' },
+  { value: 'Soil Report', icon: '⛰️', desc: 'Geotechnical report, site classification' },
+  { value: 'Energy Rating', icon: '⚡', desc: '7-star NatHERS, Whole-of-Home' },
+  { value: 'Title', icon: '📜', desc: 'Title search, lot/plan, easements' },
+  { value: 'Planning Report', icon: '🗺️', desc: 'VicPlan property report' },
+  { value: 'Planning Permit', icon: '✅', desc: 'Council planning permit + plans' },
+  { value: 'BAL Report', icon: '🔥', desc: 'Bushfire attack level assessment' },
+  { value: 'Contract', icon: '📄', desc: 'Building contract' },
+  { value: 'DBI', icon: '🛡️', desc: 'Domestic Building Insurance' },
+  { value: 'Other', icon: '📎', desc: 'Other supporting document' }
+];
+
+window.HBC_TARGET_SECTIONS = [
+  'Architectural', 'Structural', 'Siting', 'Fire', 'Energy', 'Liveable', 'Pool', 'Compliance', 'Planning'
+];
+
+/* ---------- Mobile Documents tab — render ---------- */
+window.renderMobileDocuments = function() {
+  if (!PROJECT.uploadedDocs) PROJECT.uploadedDocs = [];
+  const docs = PROJECT.uploadedDocs;
+  
+  let html = '<div style="padding-bottom:80px">';
+  
+  /* Header */
+  html += '<div style="display:flex;align-items:center;gap:10px;padding:0 0 12px;border-bottom:1px solid #e5e7eb;margin-bottom:14px">';
+  html += '<h2 style="flex:1;margin:0;font-family:\'Barlow Condensed\',sans-serif;text-transform:uppercase;letter-spacing:1px;color:#0D1B2A;font-size:18px">📄 Documents + AI</h2>';
+  html += '<span style="font-size:11px;color:#64748b">' + docs.length + ' uploaded</span>';
+  html += '</div>';
+  
+  html += '<p style="font-size:12px;color:#64748b;margin:0 0 14px">Upload PDFs, plans, reports. Each document gets a label, type, and AI assessment that runs against NCC + AS standards.</p>';
+  
+  /* Upload button — big and prominent */
+  html += '<button onclick="mbDocUpload()" style="display:flex;align-items:center;justify-content:center;gap:10px;width:100%;background:linear-gradient(180deg,#FF7A4A 0%,#F05A28 100%);color:#fff;border:none;border-radius:14px;padding:18px;margin-bottom:14px;font-size:15px;font-weight:700;cursor:pointer;box-shadow:0 4px 12px rgba(240,90,40,.35)">';
+  html += '<span style="font-size:22px">📥</span>';
+  html += '<span>Upload Document</span>';
+  html += '</button>';
+  
+  if (!docs.length) {
+    html += '<div style="text-align:center;padding:40px 20px;color:#94a3b8;background:#fff;border-radius:12px"><div style="font-size:48px;margin-bottom:14px">📁</div><p style="font-size:14px;font-weight:600;color:#475569;margin:0 0 6px">No documents yet</p><p style="font-size:12px;margin:0">Tap "Upload Document" to add architectural drawings, structural plans, energy ratings, and have AI assess them.</p></div>';
+  } else {
+    docs.forEach((d, i) => {
+      html += renderDocCardMobile(d, i);
+    });
+  }
+  
+  html += '</div>';
+  return html;
+};
+
+/* ---------- Single document card on mobile ---------- */
+function renderDocCardMobile(d, i) {
+  const outcome = d.aiOutcome || 'Pending';
+  const outcomeColor = outcome === 'Passed' ? '#16a34a' : outcome === 'RFI' ? '#d97706' : outcome === 'Failed' || outcome === 'Error' ? '#dc2626' : outcome === 'Working...' ? '#0D1B2A' : '#64748b';
+  const isWorking = outcome === 'Working...';
+  
+  const typeInfo = HBC_DOC_TYPES.find(t => t.value === d.docType);
+  const icon = typeInfo ? typeInfo.icon : '📄';
+  
+  let html = '<div style="background:#fff;border-radius:12px;padding:14px;margin-bottom:10px;box-shadow:0 1px 3px rgba(0,0,0,.05);border-left:4px solid ' + outcomeColor + '">';
+  
+  /* Top row — icon, label, status */
+  html += '<div style="display:flex;align-items:flex-start;gap:10px;margin-bottom:10px">';
+  html += '<div style="font-size:24px;flex-shrink:0">' + icon + '</div>';
+  html += '<div style="flex:1;min-width:0">';
+  html += '<div style="font-size:13px;font-weight:700;color:#0D1B2A;line-height:1.3;word-break:break-word">' + esc(d.label || d.fileName || 'Untitled document') + '</div>';
+  html += '<div style="font-size:10px;color:#64748b;margin-top:2px">' + esc(d.fileName || '') + (d.size ? ' · ' + esc(d.size) : '') + '</div>';
+  html += '</div>';
+  html += '<button onclick="mbRemoveDoc(' + i + ')" style="background:#fee2e2;color:#991b1b;border:none;border-radius:6px;width:32px;height:32px;font-size:14px;font-weight:700;cursor:pointer;flex-shrink:0">✕</button>';
+  html += '</div>';
+  
+  /* Outcome badge */
+  html += '<div style="display:flex;align-items:center;gap:6px;margin-bottom:10px">';
+  html += '<span style="background:' + outcomeColor + ';color:#fff;font-size:10px;font-weight:700;padding:4px 10px;border-radius:12px;text-transform:uppercase;letter-spacing:.5px">' + (isWorking ? '⏳ ' + outcome : '⬤ ' + outcome) + '</span>';
+  if (d.aiModel) html += '<span style="font-size:10px;color:#64748b">via ' + esc(d.aiModel) + '</span>';
+  html += '</div>';
+  
+  /* Document name field */
+  html += '<div style="margin-bottom:8px"><label style="font-size:10px;color:#64748b;font-weight:700;text-transform:uppercase;letter-spacing:.5px;display:block;margin-bottom:3px">Label</label>';
+  html += '<input value="' + esc(d.label || '') + '" oninput="PROJECT.uploadedDocs[' + i + '].label=this.value;saveProject(true)" style="width:100%;font-size:16px;padding:8px 10px;border:1.5px solid #e5e7eb;border-radius:8px;box-sizing:border-box"></div>';
+  
+  /* Document type — chip picker */
+  html += '<div style="margin-bottom:8px"><label style="font-size:10px;color:#64748b;font-weight:700;text-transform:uppercase;letter-spacing:.5px;display:block;margin-bottom:5px">Document Type</label>';
+  html += '<button onclick="mbPickDocType(' + i + ')" style="width:100%;display:flex;align-items:center;gap:8px;padding:10px 12px;background:#f6f8fa;border:1.5px solid #e5e7eb;border-radius:8px;font-size:13px;color:#0D1B2A;cursor:pointer;text-align:left">';
+  html += '<span style="font-size:18px">' + icon + '</span>';
+  html += '<span style="flex:1">' + (d.docType || 'Tap to select type…') + '</span>';
+  html += '<span style="color:#F05A28">›</span>';
+  html += '</button></div>';
+  
+  /* AI Model + Target Section side by side */
+  html += '<div style="display:grid;grid-template-columns:1fr 1fr;gap:6px;margin-bottom:8px">';
+  html += '<div><label style="font-size:10px;color:#64748b;font-weight:700;text-transform:uppercase;letter-spacing:.5px;display:block;margin-bottom:3px">AI Model</label>';
+  html += '<select onchange="PROJECT.uploadedDocs[' + i + '].aiModel=this.value;saveProject(true)" style="width:100%;font-size:14px;padding:8px;border:1.5px solid #e5e7eb;border-radius:8px;background:#fff">';
+  html += '<option value="google" ' + (d.aiModel==='google'?'selected':'') + '>🔮 Gemini</option>';
+  html += '<option value="claude" ' + (d.aiModel==='claude'?'selected':'') + '>🪶 Claude</option>';
+  html += '<option value="chatgpt" ' + (d.aiModel==='chatgpt'?'selected':'') + '>🤖 ChatGPT</option>';
+  html += '</select></div>';
+  
+  html += '<div><label style="font-size:10px;color:#64748b;font-weight:700;text-transform:uppercase;letter-spacing:.5px;display:block;margin-bottom:3px">Target Section</label>';
+  html += '<select onchange="PROJECT.uploadedDocs[' + i + '].targetSection=this.value;saveProject(true)" style="width:100%;font-size:14px;padding:8px;border:1.5px solid #e5e7eb;border-radius:8px;background:#fff">';
+  html += '<option value="">— Select —</option>';
+  HBC_TARGET_SECTIONS.forEach(s => {
+    html += '<option ' + (d.targetSection===s?'selected':'') + '>' + s + '</option>';
+  });
+  html += '</select></div>';
+  html += '</div>';
+  
+  /* Run AI button — big and clear */
+  html += '<button onclick="runAIonUpload(' + i + ')" ' + (isWorking?'disabled':'') + ' style="width:100%;background:' + (isWorking ? '#94a3b8' : 'linear-gradient(180deg,#7C3AED 0%,#5B21B6 100%)') + ';color:#fff;border:none;border-radius:10px;padding:14px;margin-bottom:8px;font-size:14px;font-weight:700;cursor:' + (isWorking?'not-allowed':'pointer') + ';display:flex;align-items:center;justify-content:center;gap:8px;box-shadow:0 2px 6px rgba(124,58,237,.3)">';
+  html += isWorking ? '⏳ AI working...' : '🤖 Run AI Assessment';
+  html += '</button>';
+  
+  /* AI Notes — expandable */
+  if (d.aiNotes) {
+    const preview = d.aiNotes.length > 200 ? d.aiNotes.slice(0, 200) + '…' : d.aiNotes;
+    html += '<div style="background:#f0f9ff;border:1.5px solid #bae6fd;border-radius:8px;padding:10px;margin-top:8px">';
+    html += '<div style="display:flex;align-items:center;gap:6px;margin-bottom:6px">';
+    html += '<span style="font-size:10px;color:#0c4a6e;font-weight:700;text-transform:uppercase;letter-spacing:.5px;flex:1">🤖 AI Notes</span>';
+    html += '<button onclick="mbViewDocAI(' + i + ')" style="background:#0D1B2A;color:#fff;border:none;border-radius:4px;padding:3px 8px;font-size:10px;font-weight:700;cursor:pointer">View Full</button>';
+    html += '</div>';
+    html += '<div style="font-size:12px;line-height:1.5;color:#0c4a6e;white-space:pre-wrap">' + esc(preview) + '</div>';
+    html += '</div>';
+  }
+  
+  /* Push to Section button — only if outcome and targetSection both set */
+  if (d.aiOutcome && d.aiOutcome !== 'Pending' && d.aiOutcome !== 'Working...' && d.targetSection) {
+    html += '<button onclick="mbPushDocToSection(' + i + ')" style="width:100%;background:#0D1B2A;color:#fff;border:none;border-radius:8px;padding:10px;margin-top:8px;font-size:13px;font-weight:700;cursor:pointer">→ Push to ' + esc(d.targetSection) + ' section</button>';
+  }
+  
+  html += '</div>';
+  return html;
+}
+
+/* ---------- Upload action ---------- */
+window.mbDocUpload = function() {
+  if (typeof haptic === 'function') haptic(8);
+  const input = document.createElement('input');
+  input.type = 'file';
+  input.accept = '.pdf,.jpg,.jpeg,.png,.dwg,.dxf,application/pdf,image/*';
+  input.multiple = true;
+  input.onchange = function(e) {
+    const files = Array.from(e.target.files || []);
+    if (!files.length) return;
+    if (!PROJECT.uploadedDocs) PROJECT.uploadedDocs = [];
+    const baseRouting = (PROJECT.settings && PROJECT.settings.ai && PROJECT.settings.ai.routing && PROJECT.settings.ai.routing.documents) || 'google';
+    
+    let pending = files.length;
+    files.forEach(f => {
+      const reader = new FileReader();
+      reader.onload = function(ev) {
+        PROJECT.uploadedDocs.push({
+          fileName: f.name,
+          label: f.name.replace(/\.[^.]+$/, ''),
+          size: (f.size/1024).toFixed(0) + ' KB',
+          docType: '',
+          docDate: '',
+          targetSection: '',
+          aiModel: baseRouting,
+          aiOutcome: 'Pending',
+          aiNotes: '',
+          fileType: f.type,
+          fileData: ev.target.result,
+          uploadedAt: Date.now()
+        });
+        pending--;
+        if (pending === 0) {
+          if (typeof saveProject === 'function') saveProject(true);
+          if (typeof haptic === 'function') haptic([10,30,10]);
+          if (typeof showToast === 'function') showToast('✓ ' + files.length + ' document(s) uploaded', 'ok');
+          if (typeof renderMobilePage === 'function') renderMobilePage();
+        }
+      };
+      reader.readAsDataURL(f);
+    });
+  };
+  input.click();
+};
+
+window.mbRemoveDoc = function(i) {
+  if (!confirm('Remove this document?')) return;
+  PROJECT.uploadedDocs.splice(i, 1);
+  if (typeof saveProject === 'function') saveProject(true);
+  if (typeof haptic === 'function') haptic(8);
+  if (typeof renderMobilePage === 'function') renderMobilePage();
+};
+
+window.mbPickDocType = function(i) {
+  if (typeof haptic === 'function') haptic(8);
+  const d = PROJECT.uploadedDocs[i];
+  if (!d) return;
+  let html = '<p style="font-size:13px;color:#64748b;margin-bottom:14px">Pick the document type — AI will tailor its assessment to that category.</p>';
+  HBC_DOC_TYPES.forEach(t => {
+    const sel = d.docType === t.value;
+    html += '<button onclick="mbSetDocType(' + i + ',\'' + t.value.replace(/'/g,"\\'") + '\')" style="display:flex;align-items:center;gap:12px;width:100%;background:' + (sel?'#fff7ed':'#fff') + ';border:1.5px solid ' + (sel?'#F05A28':'#e5e7eb') + ';border-radius:10px;padding:12px;margin-bottom:6px;cursor:pointer;text-align:left">';
+    html += '<span style="font-size:22px">' + t.icon + '</span>';
+    html += '<div style="flex:1">';
+    html += '<div style="font-size:13px;font-weight:700;color:#0D1B2A">' + t.value + '</div>';
+    html += '<div style="font-size:11px;color:#64748b;margin-top:2px">' + t.desc + '</div>';
+    html += '</div>';
+    if (sel) html += '<span style="color:#F05A28;font-size:18px;font-weight:700">✓</span>';
+    html += '</button>';
+  });
+  if (typeof mbBottomSheet === 'function') mbBottomSheet('Document Type', html);
+};
+
+window.mbSetDocType = function(i, type) {
+  PROJECT.uploadedDocs[i].docType = type;
+  if (typeof saveProject === 'function') saveProject(true);
+  if (typeof haptic === 'function') haptic([8,20,8]);
+  if (typeof mbCloseSheet === 'function') mbCloseSheet();
+  if (typeof renderMobilePage === 'function') renderMobilePage();
+};
+
+window.mbViewDocAI = function(i) {
+  if (typeof haptic === 'function') haptic(8);
+  const d = PROJECT.uploadedDocs[i];
+  if (!d) return;
+  let html = '<div style="background:#f0f9ff;padding:12px;border-radius:8px;margin-bottom:14px">';
+  html += '<div style="font-size:11px;font-weight:700;color:#0c4a6e;text-transform:uppercase;letter-spacing:.5px;margin-bottom:4px">' + esc(d.label || 'Document') + '</div>';
+  html += '<div style="font-size:11px;color:#64748b">' + esc(d.docType || 'Unspecified type') + ' · ' + esc(d.aiOutcome || 'Pending') + '</div>';
+  html += '</div>';
+  html += '<textarea oninput="PROJECT.uploadedDocs[' + i + '].aiNotes=this.value;saveProject(true)" style="width:100%;min-height:300px;font-size:14px;padding:12px;border:1.5px solid #e5e7eb;border-radius:8px;box-sizing:border-box;line-height:1.5;font-family:-apple-system,system-ui,sans-serif">' + esc(d.aiNotes || '') + '</textarea>';
+  html += '<p style="font-size:11px;color:#94a3b8;margin:8px 0 14px">You can edit the AI notes — your changes save automatically.</p>';
+  html += '<button onclick="mbCloseSheet()" style="width:100%;background:#0D1B2A;color:#fff;border:none;border-radius:8px;padding:12px;font-size:13px;font-weight:700;cursor:pointer">✓ Done</button>';
+  if (typeof mbBottomSheet === 'function') mbBottomSheet('AI Notes — Full View', html);
+};
+
+window.mbPushDocToSection = function(i) {
+  const d = PROJECT.uploadedDocs[i];
+  if (!d || !d.targetSection) return;
+  if (typeof haptic === 'function') haptic([8,30,8]);
+  /* Just mark it pushed — actual integration logic exists in desktop. For mobile, save a flag. */
+  d.pushedToSection = true;
+  d.pushedAt = Date.now();
+  if (typeof saveProject === 'function') saveProject(true);
+  if (typeof showToast === 'function') showToast('✓ Pushed to ' + d.targetSection, 'ok');
+  if (typeof renderMobilePage === 'function') renderMobilePage();
+};
+
+/* ---------- Add Documents to mobile tab bar via a Consultant menu ---------- */
+window.mbOpenConsultantMenu = function() {
+  if (typeof haptic === 'function') haptic(8);
+  let html = '<p style="font-size:13px;color:#64748b;margin-bottom:14px">Building Consultant workflows. The mobile-native versions are marked ✓ Mobile-ready. Others open in desktop view.</p>';
+  
+  /* Mobile-native ones first */
+  html += '<button onclick="mbOpenConsultantTab(\'documents\')" style="display:flex;align-items:center;gap:12px;width:100%;background:#fff7ed;border:1.5px solid #F05A28;border-radius:10px;padding:14px;margin-bottom:8px;cursor:pointer;text-align:left">';
+  html += '<span style="font-size:24px">📄</span>';
+  html += '<div style="flex:1"><div style="font-size:13px;font-weight:700;color:#0D1B2A">Documents + AI Upload</div><div style="font-size:10px;color:#16a34a;font-weight:700;text-transform:uppercase;margin-top:2px">✓ Mobile-native</div></div>';
+  html += '<span style="color:#F05A28;font-size:18px">›</span></button>';
+  
+  /* Desktop-view ones */
+  const desktopTabs = HBC_TABS_LIST.filter(t => t.id !== 3 && t.id !== 0 && t.id !== 16);
+  html += '<div style="font-size:11px;color:#64748b;font-weight:700;text-transform:uppercase;letter-spacing:.5px;margin:14px 0 6px">Desktop view tabs</div>';
+  desktopTabs.forEach(t => {
+    html += '<button onclick="mbJumpToDesktopTab(' + t.id + ')" style="display:flex;align-items:center;gap:12px;width:100%;background:#fff;border:1.5px solid #e5e7eb;border-radius:10px;padding:12px;margin-bottom:6px;cursor:pointer;text-align:left">';
+    html += '<span style="background:#0D1B2A;color:#fff;width:28px;height:28px;border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:11px;font-weight:700;flex-shrink:0">' + t.num + '</span>';
+    html += '<span style="flex:1;font-size:13px;color:#0D1B2A;font-weight:600">' + t.label + '</span>';
+    html += '<span style="color:#64748b">›</span></button>';
+  });
+  
+  if (typeof mbBottomSheet === 'function') mbBottomSheet('Building Consultant', html);
+};
+
+window.mbOpenConsultantTab = function(tabName) {
+  if (typeof mbCloseSheet === 'function') mbCloseSheet();
+  if (typeof haptic === 'function') haptic(8);
+  if (!window.MOBILE_STATE) window.MOBILE_STATE = {};
+  MOBILE_STATE.activeTab = 'consultant_' + tabName;
+  if (typeof renderMobilePage === 'function') renderMobilePage();
+};
+
+window.mbJumpToDesktopTab = function(tabId) {
+  if (typeof mbCloseSheet === 'function') mbCloseSheet();
+  if (typeof showToast === 'function') showToast('Switching to desktop view…', 'ok');
+  setTimeout(() => {
+    if (typeof setViewMode === 'function') setViewMode('desktop');
+    setTimeout(() => {
+      if (typeof goTab === 'function') goTab(tabId);
+    }, 200);
+  }, 300);
+};
+
+/* Hook into mobile page renderer to handle consultant_documents tab */
+(function injectConsultantRouting() {
+  const orig = window.renderMobilePage;
+  if (typeof orig !== 'function') return;
+  window.renderMobilePage = function() {
+    if (!document.body.classList.contains('mobile-mode')) {
+      return orig.apply(this, arguments);
+    }
+    if (MOBILE_STATE && MOBILE_STATE.activeTab && MOBILE_STATE.activeTab.indexOf('consultant_') === 0) {
+      const which = MOBILE_STATE.activeTab.slice('consultant_'.length);
+      const pagesDiv = document.getElementById('pages');
+      let html = (typeof renderMobileTopBar === 'function') ? renderMobileTopBar() : '';
+      html += '<div class="mb-content">';
+      if (which === 'documents') {
+        html += renderMobileDocuments();
+      } else {
+        html += '<p style="padding:20px;text-align:center">Tab not available on mobile yet.</p>';
+      }
+      html += '</div>';
+      html += (typeof renderMobileTabBar === 'function') ? renderMobileTabBar() : '';
+      if (pagesDiv) pagesDiv.innerHTML = html;
+      return;
+    }
+    return orig.apply(this, arguments);
+  };
+})();
+
+/* Add a Consultant button to the mobile setup tab */
+(function addConsultantToSetup() {
+  const orig = window.renderMobileSetup;
+  if (typeof orig !== 'function') return;
+  window.renderMobileSetup = function() {
+    let html = orig.apply(this, arguments);
+    const block = '<div class="mb-item-card" style="border-left-color:#F05A28">' +
+      '<div class="mb-item-cat">🏛 Building Consultant</div>' +
+      '<div style="font-size:13px;color:#475569;margin-bottom:8px">Access the consultant workflows. Documents + AI Upload is mobile-native. Other tabs open in desktop view temporarily.</div>' +
+      '<button class="mb-detail-btn primary" style="width:100%;background:#F05A28" onclick="mbOpenConsultantMenu()">🏛 Open Consultant menu</button>' +
+    '</div>';
+    return html + block;
+  };
+})();
+
+console.log('[Phase N Part A] Mobile-native Documents+AI screen + Consultant menu loaded');
+
+
 </script>
 </body>
 </html>
