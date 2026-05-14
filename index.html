@@ -24880,7 +24880,7 @@ window.mbAIWriteLib = function(key) {
 /* =========================================================
    6. HOOK INTO MOBILE INSPECT TAB — v1.2 AGGRESSIVE OVERRIDE
    ========================================================= */
-window.HBC_PHASE_P_VERSION = '1.3';
+window.HBC_PHASE_P_VERSION = '1.4-221257';
 
 /* Default Comprehensive mode ON so deep checklist is visible immediately */
 if (LIBRARY_STATE && !LIBRARY_STATE.depthMode) {
@@ -24993,6 +24993,34 @@ console.log('[Phase P v' + window.HBC_PHASE_P_VERSION + '] AGGRESSIVE override i
     h += '<div>Service Worker: <b>' + (navigator.serviceWorker && navigator.serviceWorker.controller ? 'controlling' : 'not-active') + '</b></div>';
     h += '<div>Online: <b>' + (navigator.onLine ? 'yes' : 'no') + '</b></div>';
     h += '<div>User Agent: <span style="font-size:9px;color:#94a3b8;word-break:break-all">' + navigator.userAgent + '</span></div>';
+    h += '</div>';
+    
+    /* DEPTH FILTER SELF-TEST — proves the filter works on this device */
+    h += '<div style="background:#1a2942;padding:10px 12px;border-radius:8px;margin-bottom:10px;border:2px solid #10B981">';
+    h += '<div style="font-size:10px;color:#10B981;font-weight:800;letter-spacing:1px;margin-bottom:8px">🧪 DEPTH FILTER SELF-TEST</div>';
+    try {
+      const ppLib = window.INSPECTION_LIBRARY && window.INSPECTION_LIBRARY['PrePurchaseBP'];
+      if (ppLib) {
+        const intGrp = ppLib.groups.find(g => g.name === 'INTERIOR');
+        const kitchen = intGrp && intGrp.locations.find(l => l.location === 'Kitchen');
+        if (kitchen) {
+          const sCount = kitchen.items.filter(it => itemPassesDepth(it, 'short')).length;
+          const mCount = kitchen.items.filter(it => itemPassesDepth(it, 'med')).length;
+          const dCount = kitchen.items.filter(it => itemPassesDepth(it, 'deep')).length;
+          const working = (sCount < mCount && mCount < dCount);
+          h += '<div>Kitchen items at <b style="color:#94a3b8">Short</b>: <b style="color:#10B981">' + sCount + '</b></div>';
+          h += '<div>Kitchen items at <b style="color:#fbbf24">Medium</b>: <b style="color:#10B981">' + mCount + '</b></div>';
+          h += '<div>Kitchen items at <b style="color:#F05A28">Deep</b>: <b style="color:#10B981">' + dCount + '</b></div>';
+          h += '<div style="margin-top:6px;padding:6px 8px;background:' + (working ? '#065f46' : '#7f1d1d') + ';border-radius:6px;color:#fff;font-weight:800">' + (working ? '✓ FILTER IS WORKING — counts differ across modes' : '✗ FILTER NOT WORKING — counts identical') + '</div>';
+        } else {
+          h += '<div style="color:#fca5a5">Kitchen location not found</div>';
+        }
+      } else {
+        h += '<div style="color:#fca5a5">PrePurchaseBP library not loaded</div>';
+      }
+    } catch(e) {
+      h += '<div style="color:#fca5a5">Self-test failed: ' + e.message + '</div>';
+    }
     h += '</div>';
     
     /* Library counts per inspection type */
