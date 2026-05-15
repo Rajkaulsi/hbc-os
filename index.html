@@ -24337,15 +24337,19 @@ if (typeof LIBRARY_STATE.showComprehensive !== 'undefined') {
 }
 if (!LIBRARY_STATE.depthMode) LIBRARY_STATE.depthMode = 'med';
 
-/* Decide if an item is included at the current depth */
+/* Decide if an item is included at the current depth.
+   Rebalanced so EVERY location has a meaningful Short/Medium/Deep ladder.
+   Short  = severity 4-5 only (safety, compliance, critical)
+   Medium = severity 3+ (safety + key quality + structural tolerances)
+   Deep   = all items (every tolerance, every photo task, every quality detail)
+   sev 0 / 1 / 2 (cosmetic, presentation) only appear at Deep. */
 window.itemPassesDepth = function(it, mode) {
   mode = mode || LIBRARY_STATE.depthMode || 'med';
-  if (it.level === 'std') return true; /* std always shows */
-  /* it.level === 'comp' */
+  const sev = it.sev || 0;
   if (mode === 'deep') return true;
-  if (mode === 'short') return false;
-  /* medium: include comp items with severity >= 3 (key quality + safety) */
-  return (it.sev || 0) >= 3;
+  if (mode === 'short') return sev >= 4;
+  /* medium */
+  return sev >= 3;
 };
 
 window.cycleDepthMode = function() {
@@ -24404,18 +24408,23 @@ window.renderMobileInspectionLibrary = function(typeId, jobInsp) {
   });
   html += '</div>';
   
-  /* 3-segment depth control — compact, sits next to AI keys */
+  /* Inline depth control — ONLY when viewing items (matches the bottom pill).
+     The AI keys button stays available throughout the inspection. */
   html += '<div style="padding:8px 8px 0;display:flex;align-items:center;gap:6px">';
-  html += '<div style="flex:1;display:flex;background:#f3f4f6;border-radius:8px;padding:2px;border:1.5px solid #e5e7eb">';
-  [
-    {k:'short', label:'Short', icon:'○'},
-    {k:'med',   label:'Medium', icon:'◐'},
-    {k:'deep',  label:'Deep',  icon:'●'}
-  ].forEach(seg => {
-    const on = mode === seg.k;
-    html += '<button onclick="window.setDepthMode(\'' + seg.k + '\')" style="flex:1;background:' + (on ? '#F05A28' : 'transparent') + ';color:' + (on ? '#fff' : '#0D1B2A') + ';border:none;border-radius:6px;padding:6px 4px;font-size:11px;font-weight:700;cursor:pointer">' + seg.icon + ' ' + seg.label + '</button>';
-  });
-  html += '</div>';
+  if (currentLoc) {
+    html += '<div style="flex:1;display:flex;background:#f3f4f6;border-radius:8px;padding:2px;border:1.5px solid #e5e7eb">';
+    [
+      {k:'short', label:'Short', icon:'○'},
+      {k:'med',   label:'Medium', icon:'◐'},
+      {k:'deep',  label:'Deep',  icon:'●'}
+    ].forEach(seg => {
+      const on = mode === seg.k;
+      html += '<button onclick="window.setDepthMode(\'' + seg.k + '\')" style="flex:1;background:' + (on ? '#F05A28' : 'transparent') + ';color:' + (on ? '#fff' : '#0D1B2A') + ';border:none;border-radius:6px;padding:6px 4px;font-size:11px;font-weight:700;cursor:pointer">' + seg.icon + ' ' + seg.label + '</button>';
+    });
+    html += '</div>';
+  } else {
+    html += '<div style="flex:1"></div>';
+  }
   html += '<button onclick="mbOpenAIKeys()" style="background:#10B981;color:#fff;border:none;border-radius:8px;padding:7px 10px;font-size:11px;font-weight:700;cursor:pointer;flex-shrink:0">🔑 AI</button>';
   html += '</div>';
   html += '</div>';
@@ -24880,7 +24889,7 @@ window.mbAIWriteLib = function(key) {
 /* =========================================================
    6. HOOK INTO MOBILE INSPECT TAB — v1.2 AGGRESSIVE OVERRIDE
    ========================================================= */
-window.HBC_PHASE_P_VERSION = '1.4-221257';
+window.HBC_PHASE_P_VERSION = '2.0-082320';
 
 /* Default Comprehensive mode ON so deep checklist is visible immediately */
 if (LIBRARY_STATE && !LIBRARY_STATE.depthMode) {
@@ -25047,6 +25056,23 @@ console.log('[Phase P v' + window.HBC_PHASE_P_VERSION + '] AGGRESSIVE override i
     /* Recent console log */
     h += '<div style="background:#1a2942;padding:10px 12px;border-radius:8px;margin-bottom:10px">';
     h += '<div style="display:flex;align-items:center;gap:8px;margin-bottom:8px">';
+    h += '<span style="font-size:10px;color:#10B981;font-weight:800;letter-spacing:1px;flex:1">🔑 AI API KEYS</span>';
+    h += '<button onclick="document.getElementById(\'hbcDiagPanel\').remove(); window.mbOpenAIKeys && window.mbOpenAIKeys();" style="background:#10B981;color:#fff;border:none;border-radius:6px;padding:6px 12px;font-size:11px;font-weight:800;cursor:pointer;font-family:sans-serif">Manage Keys →</button>';
+    h += '</div>';
+    try {
+      const aiSet = (window.PROJECT && window.PROJECT.settings && window.PROJECT.settings.ai) || {};
+      const checkKey = (p) => aiSet[p] && aiSet[p].key ? '<span style="color:#10B981;font-weight:800">● SET</span>' : '<span style="color:#94a3b8">○ Empty</span>';
+      h += '<div>🔮 Google Gemini: ' + checkKey('google') + ((aiSet.google && aiSet.google.model) ? ' <span style="color:#94a3b8">(' + aiSet.google.model + ')</span>' : '') + '</div>';
+      h += '<div>🪶 Anthropic Claude: ' + checkKey('claude') + ((aiSet.claude && aiSet.claude.model) ? ' <span style="color:#94a3b8">(' + aiSet.claude.model + ')</span>' : '') + '</div>';
+      h += '<div>🤖 OpenAI ChatGPT: ' + checkKey('chatgpt') + ((aiSet.chatgpt && aiSet.chatgpt.model) ? ' <span style="color:#94a3b8">(' + aiSet.chatgpt.model + ')</span>' : '') + '</div>';
+    } catch(e) {
+      h += '<div style="color:#fca5a5">Could not read AI settings: ' + e.message + '</div>';
+    }
+    h += '</div>';
+    
+    /* Recent console log */
+    h += '<div style="background:#1a2942;padding:10px 12px;border-radius:8px;margin-bottom:10px">';
+    h += '<div style="display:flex;align-items:center;gap:8px;margin-bottom:8px">';
     h += '<span style="font-size:10px;color:#F05A28;font-weight:800;letter-spacing:1px;flex:1">📜 CONSOLE LOG (last 80)</span>';
     h += '<button onclick="window.HBC_CONSOLE_LOG = []; document.getElementById(\'hbcDiagPanel\').remove(); window.openDiagnostics();" style="background:#475569;color:#fff;border:none;border-radius:6px;padding:4px 8px;font-size:10px;font-weight:700;cursor:pointer;font-family:sans-serif">Clear</button>';
     h += '<button onclick="window.shareDiagnostics()" style="background:#10B981;color:#fff;border:none;border-radius:6px;padding:4px 8px;font-size:10px;font-weight:700;cursor:pointer;font-family:sans-serif">📋 Copy</button>';
@@ -25101,7 +25127,7 @@ console.log('[Phase P v' + window.HBC_PHASE_P_VERSION + '] AGGRESSIVE override i
     }
   };
   
-  /* COMPACT 3-SEGMENT DEPTH PILL — fixed bottom-right, small */
+  /* COMPACT DEPTH PILL — fixed bottom-right, ONLY shown on inspection item views */
   const toggleBar = document.createElement('div');
   toggleBar.id = 'hbcPhasePToggle';
   
@@ -25114,20 +25140,51 @@ console.log('[Phase P v' + window.HBC_PHASE_P_VERSION + '] AGGRESSIVE override i
     paintToggle();
   };
   
+  /* Decide if the toggle pill should be visible right now.
+     Only show when:
+       - Mobile inspect tab is active AND
+       - An inspection library exists for the active type AND
+       - We're inside a LOCATION (looking at items) — the filter only matters here */
+  window.shouldShowDepthPill = function() {
+    try {
+      if (!window.MOBILE_STATE || window.MOBILE_STATE.activeTab !== 'inspect') return false;
+      if (!window.LIBRARY_STATE || !window.LIBRARY_STATE.currentLocation) return false;
+      const t = window.PROJECT && window.PROJECT.inspections && window.PROJECT.inspections.currentType;
+      if (!t) return false;
+      return !!(window.INSPECTION_LIBRARY && window.INSPECTION_LIBRARY[t]);
+    } catch(e) { return false; }
+  };
+  
   function paintToggle() {
+    if (!window.shouldShowDepthPill()) {
+      toggleBar.style.display = 'none';
+      return;
+    }
+    toggleBar.style.display = 'flex';
     const mode = (window.LIBRARY_STATE && window.LIBRARY_STATE.depthMode) || 'med';
     const seg = function(k, label, icon) {
       const on = mode === k;
       return '<button onclick="window.setDepthMode(\'' + k + '\')" style="background:' + (on ? '#F05A28' : 'transparent') + ';color:' + (on ? '#fff' : '#0D1B2A') + ';border:none;border-radius:14px;padding:6px 10px;font-size:11px;font-weight:700;cursor:pointer;font-family:sans-serif">' + icon + ' ' + label + '</button>';
     };
-    toggleBar.innerHTML = seg('short','Short','○') + seg('med','Medium','◐') + seg('deep','Deep','●');
+    toggleBar.innerHTML = seg('short','Short','○') + seg('med','Med','◐') + seg('deep','Deep','●');
   }
   window._paintHBCToggle = paintToggle;
-  toggleBar.style.cssText = 'position:fixed;bottom:12px;right:12px;z-index:99998;background:#fff;border:1.5px solid #e5e7eb;border-radius:18px;padding:3px;box-shadow:0 4px 12px rgba(0,0,0,.12);display:flex;gap:2px;font-family:sans-serif';
+  toggleBar.style.cssText = 'position:fixed;bottom:12px;right:12px;z-index:99998;background:#fff;border:1.5px solid #e5e7eb;border-radius:18px;padding:3px;box-shadow:0 4px 12px rgba(0,0,0,.12);display:none;gap:2px;font-family:sans-serif';
   document.body.appendChild(toggleBar);
   paintToggle();
   
-  console.log('[Phase P v' + window.HBC_PHASE_P_VERSION + '] Compact depth pill + diagnostics panel installed');
+  /* Auto-repaint the toggle on every renderMobilePage call so it appears/hides correctly */
+  if (typeof window.renderMobilePage === 'function' && !window.renderMobilePage._depthPillHooked) {
+    const origRender = window.renderMobilePage;
+    window.renderMobilePage = function() {
+      const r = origRender.apply(this, arguments);
+      try { paintToggle(); } catch(e) {}
+      return r;
+    };
+    window.renderMobilePage._depthPillHooked = true;
+  }
+  
+  console.log('[Phase P v' + window.HBC_PHASE_P_VERSION + '] Depth pill + diagnostics panel installed (pill visibility-aware)');
 })();
 
 /* =========================================================
@@ -25937,6 +25994,1532 @@ console.log('[Phase P] Library stats:', Object.keys(window.INSPECTION_LIBRARY).m
   console.log('[Phase P Comprehensive Expansion] Added ' + n + ' deep-checklist items across libraries.');
 })();
 
+
+
+/* ============================================================
+   PHASE Q — NEW GROUPS for all inspection types
+   ============================================================ */
+/* ============================================================
+   PHASE Q — Comprehensive Group Expansion
+   Adds new groups to all 17 inspection types
+   ============================================================ */
+(function expandLibraryWithNewGroups() {
+  if (!window.INSPECTION_LIBRARY) {
+    setTimeout(expandLibraryWithNewGroups, 100);
+    return;
+  }
+
+  let totalAdded = 0;
+
+  function addGroup(typeId, groupName, locations) {
+    const lib = window.INSPECTION_LIBRARY[typeId];
+    if (!lib) return 0;
+    if (lib.groups.find(g => g.name === groupName)) return 0;
+    const grp = { name: groupName, locations: [] };
+    let cnt = 0;
+    Object.keys(locations).forEach(locName => {
+      const items = locations[locName];
+      const slug = locName.toLowerCase().replace(/[^a-z0-9]+/g, "_");
+      grp.locations.push({
+        location: locName,
+        items: items.map((it, i) => ({
+          key: "q_" + slug + "_" + i,
+          label: it[0], sev: it[1] || 2, ref: it[2] || "", level: "std"
+        }))
+      });
+      cnt += items.length;
+    });
+    lib.groups.push(grp);
+    return cnt;
+  }
+
+  /* ===== PrePurchaseBP ===== */
+  totalAdded += addGroup("PrePurchaseBP", "\ud83d\udc1c PEST (AS 4349.3)", {
+    "Termite Activity & Damage": [
+      ["Active termite workings \u2014 visible mudding on piers/walls", 5, "AS 4349.3"],
+      ["Active termite leads on slab edge", 5, "AS 4349.3"],
+      ["Active workings inside walls (sounding test)", 5, "AS 4349.3"],
+      ["Active workings in roof void framing", 5, "AS 4349.3"],
+      ["Active workings in sub-floor framing", 5, "AS 4349.3"],
+      ["Old/inactive termite damage in framing", 4, "AS 4349.3"],
+      ["Old/inactive termite damage in finishes", 3, "AS 4349.3"],
+      ["Concealed damage suspected (blistered paint)", 4, "AS 4349.3"],
+      ["Concealed damage suspected (sagging cornices)", 4, "AS 4349.3"],
+      ["Species identification \u2014 Coptotermes likely", 4, "AS 4349.3"],
+      ["Species identification \u2014 Schedorhinotermes", 4, "AS 4349.3"],
+      ["Species identification \u2014 Heterotermes", 3, "AS 4349.3"],
+      ["Mud tubes on external walls", 5, "AS 4349.3"],
+      ["Mud tubes inside cavities", 5, "AS 4349.3"],
+      ["Termite drop tubes from ceilings", 5, "AS 4349.3"],
+      ["Recommend further investigation \u2014 specialist", 4, "AS 4349.3"],
+    ],
+    "Borers & Wood Decay": [
+      ["Anobium punctatum (common furniture beetle) holes", 3, "AS 4349.3"],
+      ["Lyctus brunneus (powder post) frass", 3, "AS 4349.3"],
+      ["Calymmaderus incisus activity", 3, "AS 4349.3"],
+      ["Borer activity \u2014 recent vs old", 3, "AS 4349.3"],
+      ["Wood rot \u2014 wet rot identified", 4, "AS 4349.3"],
+      ["Wood rot \u2014 dry rot (Serpula lacrymans)", 5, "AS 4349.3"],
+      ["Brown rot \u2014 cubical cracking pattern", 4, "AS 4349.3"],
+      ["White rot \u2014 bleached fibrous timber", 4, "AS 4349.3"],
+      ["Water source for decay identified", 4, "AS 4349.3"],
+      ["Recommend timber pest specialist", 3, "AS 4349.3"],
+    ],
+    "Other Pests": [
+      ["European wasp nests", 3, "AS 4349.3"],
+      ["Paper wasp nests under eaves", 2, "AS 4349.3"],
+      ["Rodent activity \u2014 droppings, gnaw marks", 3, "AS 4349.3"],
+      ["Rodent nesting in roof void", 3, "AS 4349.3"],
+      ["Possum activity in roof void", 3, "AS 4349.3"],
+      ["Possum damage to insulation/cables", 3, "AS 4349.3"],
+      ["Birds nesting in cavities or vents", 2, "AS 4349.3"],
+      ["Bird mites or bird lice evidence", 2, "AS 4349.3"],
+      ["Cockroach activity", 2, "AS 4349.3"],
+      ["Silverfish in storage areas", 1, "AS 4349.3"],
+      ["Ant trails (non-termite)", 2, "AS 4349.3"],
+      ["Bee swarms in walls", 3, "AS 4349.3"],
+    ],
+    "Conducive Conditions": [
+      ["Timber-to-ground contact", 4, "AS 4349.3"],
+      ["Garden beds against external walls", 4, "AS 4349.3"],
+      ["Mulch against slab edge / weep holes", 4, "AS 3660.1"],
+      ["Sub-floor ventilation inadequate", 4, "NCC F6"],
+      ["Sub-floor moisture / pooling water", 4, "AS 4349.3"],
+      ["Leaking taps externally", 3, "AS 4349.3"],
+      ["Plumbing leaks in walls", 4, "AS 4349.3"],
+      ["Gutter overflow / blocked downpipes", 3, "AS 4349.3"],
+      ["Stored building rubbish (sub-floor or yard)", 3, "AS 4349.3"],
+      ["Vegetation overgrowth touching cladding", 3, "AS 4349.3"],
+      ["Trees within 5m of building", 3, "AS 4349.3"],
+      ["Slab edge concealed by paving/soil", 4, "AS 3660.1"],
+      ["Weep holes blocked or covered", 4, "AS 3700"],
+      ["Cavity wall debris bridging DPC", 4, "AS 3700"],
+      ["Air-con condensate discharge near footings", 3, "AS 4349.3"],
+    ],
+    "Termite Management System": [
+      ["Part A barrier \u2014 physical/chemical present", 4, "AS 3660.1"],
+      ["Reticulation system visible (fill points)", 4, "AS 3660.1"],
+      ["Termite management notice in meter box", 4, "AS 3660.1"],
+      ["Last treatment date documented", 4, "AS 3660.1"],
+      ["Warranty current and transferable", 4, "AS 3660.1"],
+      ["Annual inspection records available", 3, "AS 3660.1"],
+      ["Ant capping on piers (sub-floor homes)", 4, "AS 3660.1"],
+      ["Termite collar at every penetration", 4, "AS 3660.1"],
+      ["Slab edge exposure 75mm minimum", 4, "AS 3660.1"],
+      ["Inspection zones accessible", 3, "AS 3660.1"],
+      ["Recommend annual termite inspection", 4, "AS 4349.3"],
+    ],
+    "Limitations of Pest Inspection": [
+      ["No destructive testing performed", 3, "AS 4349.3"],
+      ["Concealed areas not inspected (within walls)", 3, "AS 4349.3"],
+      ["Roof void access limited by stored items", 3, "AS 4349.3"],
+      ["Sub-floor access limited by clearance", 3, "AS 4349.3"],
+      ["Weather on inspection day \u2014 affects pest activity", 2, "AS 4349.3"],
+      ["Time of year \u2014 winter reduces visible activity", 2, "AS 4349.3"],
+      ["Furniture/storage obscuring inspection", 2, "AS 4349.3"],
+      ["Insulation in roof void obscuring framing", 3, "AS 4349.3"],
+      ["Engaged a specialist for treatment quote", 2, "AS 4349.3"],
+      ["Inspection scope per AS 4349.3", 4, "AS 4349.3"],
+    ],
+  });
+  totalAdded += addGroup("PrePurchaseBP", "\ud83d\udca7 MOISTURE & DAMP", {
+    "Rising Damp & Salt Damp": [
+      ["Rising damp at base of walls \u2014 staining", 4, ""],
+      ["Salt damp efflorescence on brickwork", 4, ""],
+      ["Damp meter readings at suspect zones", 4, ""],
+      ["DPC continuity visible at slab edge", 4, "AS 3700"],
+      ["DPC bridged by paving/render", 4, "AS 3700"],
+      ["Hydrophobic injection treatment evident", 3, ""],
+    ],
+    "Lateral Damp (Penetration)": [
+      ["Lateral damp from external walls", 4, ""],
+      ["Cavity flashings absent or failed", 5, "NCC F1"],
+      ["Window flashing failure \u2014 sub-sill", 4, "NCC F1"],
+      ["Window flashing failure \u2014 head", 4, "NCC F1"],
+      ["Door threshold flashing failure", 4, "NCC F1"],
+      ["Roof leak staining ceilings", 4, ""],
+      ["Roof leak pattern \u2014 pinpoint vs spread", 4, ""],
+      ["Penetration flashing failure (vent/AC)", 4, "NCC F1"],
+      ["Box gutter overflow staining", 4, "AS 3500.3"],
+    ],
+    "Condensation & Mould": [
+      ["Condensation staining on cold walls", 3, ""],
+      ["Mould growth pattern \u2014 surface vs structural", 4, ""],
+      ["Black mould (Stachybotrys) \u2014 health risk", 5, ""],
+      ["Mould in bathroom \u2014 ventilation inadequate", 4, "NCC F4"],
+      ["Mould in bedrooms \u2014 humidity issue", 4, ""],
+      ["Ventilation deficiencies system-wide", 4, "NCC F4"],
+      ["Sub-floor condensation evidence", 3, ""],
+      ["Roof void condensation under sarking", 3, "NCC F6"],
+      ["Recommend mould remediation specialist", 4, ""],
+    ],
+    "Moisture Readings (Pinless Meter)": [
+      ["Bathroom wall reading at junction with floor", 4, ""],
+      ["Laundry wall reading at trough", 3, ""],
+      ["Kitchen wall reading behind sink", 3, ""],
+      ["Sub-floor framing reading", 4, "AS 4349.3"],
+      ["Roof void framing reading", 3, "AS 4349.3"],
+      ["External wall internal face reading", 3, ""],
+      ["Carpet underlay reading (where suspect)", 3, ""],
+      ["Crack zones reading", 3, ""],
+      ["Reading interpretation: <16% dry, 16-20% damp, >20% wet", 3, ""],
+    ],
+  });
+  totalAdded += addGroup("PrePurchaseBP", "\ud83d\udeb0 PLUMBING DETAIL (AS 3500)", {
+    "Water Service": [
+      ["Water meter location and accessibility", 2, ""],
+      ["Water meter reading at inspection", 2, ""],
+      ["Mains stop tap \u2014 labelled, accessible", 3, "AS 3500"],
+      ["Mains stop tap operational (subjective)", 3, ""],
+      ["Backflow prevention device at meter", 3, "AS 3500"],
+      ["Sub-meters for units/granny flat", 2, ""],
+      ["Pressure-reducing valve present", 2, ""],
+      ["Hot water plumbing material visible", 2, ""],
+      ["Cold water plumbing material visible", 2, ""],
+      ["Pipe lagging in roof void / sub-floor", 2, "NCC F6"],
+      ["Pipe identification labels (hot/cold)", 1, ""],
+      ["Visible plumbing leaks anywhere", 4, ""],
+      ["Pressure adequate at all fixtures (subjective)", 3, ""],
+      ["Hammer arrestors at appliances", 2, "AS 3500"],
+    ],
+    "Drainage": [
+      ["Boundary trap visible / inspection opening", 3, "AS 3500"],
+      ["IO covers in place and accessible", 2, "AS 3500"],
+      ["Drainage stack material (PVC/cast iron/EW)", 2, "AS 3500"],
+      ["Vent pipes through roof \u2014 clear", 3, "AS 3500"],
+      ["Vent pipe heights above openings", 3, "AS 3500"],
+      ["Drain gurgle on toilet flush", 3, "AS 3500"],
+      ["Slow drainage at any fixture", 3, "AS 3500"],
+      ["Sewer odours detected", 4, "AS 3500"],
+      ["Sewer connection point identified", 2, "AS 3500"],
+      ["Septic / on-site system (if applicable)", 3, ""],
+    ],
+    "Gas Service (AS 5601)": [
+      ["Gas meter location accessible", 3, "AS 5601"],
+      ["Gas meter type and capacity", 2, "AS 5601"],
+      ["Gas regulator condition", 3, "AS 5601"],
+      ["Gas pipe material (copper/steel/Tracpipe)", 3, "AS 5601"],
+      ["Gas leak smell at meter", 5, "AS 5601"],
+      ["Gas leak smell at appliances", 5, "AS 5601"],
+      ["Gas isolation valve at each appliance", 4, "AS 5601"],
+      ["Cooktop clearances per AS 5601", 4, "AS 5601"],
+      ["HWS flue terminates clear of openings", 4, "AS 5601"],
+      ["Wall furnace flue compliance", 4, "AS 5601"],
+      ["Gas Compliance Certificate visible", 4, "AS 5601"],
+      ["Bottled gas (LPG) cylinders compliant", 4, "AS 1596"],
+      ["LPG cylinder location and ventilation", 4, "AS 1596"],
+    ],
+    "Hot Water System": [
+      ["HWS type (gas/elec/heat pump/solar)", 2, ""],
+      ["HWS age / manufacturer date code", 3, ""],
+      ["HWS capacity adequate for occupants", 2, ""],
+      ["PRV / TPR valve discharge line", 4, "AS 3500.4"],
+      ["TPR discharge terminates safely", 4, "AS 3500.4"],
+      ["Tempering valve fitted (50\u00b0C max)", 5, "AS 3500.4"],
+      ["Tempering valve compliance cert date", 4, "AS 3500.4"],
+      ["Anode rod replacement recommended", 3, ""],
+      ["Earthquake straps (if elevated)", 3, ""],
+      ["Heat pump condenser clearances", 2, ""],
+      ["Solar HW roof panels secure", 3, ""],
+      ["Solar HW boost element function", 3, ""],
+    ],
+  });
+  totalAdded += addGroup("PrePurchaseBP", "\u26a1 ELECTRICAL DETAIL (AS/NZS 3000)", {
+    "Switchboard": [
+      ["Switchboard location accessible", 2, "AS/NZS 3000"],
+      ["Switchboard age and type", 2, ""],
+      ["Asbestos backing board suspected (pre-1990)", 5, ""],
+      ["Ceramic fuses \u2014 recommend replacement", 3, "AS/NZS 3000"],
+      ["Circuit breakers (MCBs) \u2014 count", 2, "AS/NZS 3000"],
+      ["RCD coverage \u2014 all final sub-circuits", 5, "AS/NZS 3000"],
+      ["RCD test buttons functional", 4, "AS/NZS 3000"],
+      ["Main switch operational", 3, "AS/NZS 3000"],
+      ["Circuit labelling clear and current", 2, ""],
+      ["No exposed live parts", 5, "AS/NZS 3000"],
+      ["Enclosure secure and weatherproof", 3, "AS/NZS 3000"],
+      ["Surge protection device fitted", 2, "AS/NZS 3000"],
+      ["Solar PV isolators present", 4, "AS/NZS 5033"],
+      ["Battery isolator and signage", 4, "AS/NZS 5139"],
+      ["EV charger circuit identified", 3, "AS/NZS 3000"],
+      ["Earthing system type (TT/TN-CS/TN-S)", 4, "AS/NZS 3000"],
+      ["Earth bond visible", 4, "AS/NZS 3000"],
+      ["Equipotential bonding to water/gas", 4, "AS/NZS 3000"],
+    ],
+    "Wiring & Cabling": [
+      ["Wiring type visible (TPS/VIR/rubber)", 4, "AS/NZS 3000"],
+      ["Old VIR/rubber wiring \u2014 replacement urgent", 5, "AS/NZS 3000"],
+      ["Cable runs supported per AS 3000", 3, "AS/NZS 3000"],
+      ["Junction boxes covered", 4, "AS/NZS 3000"],
+      ["Cables protected through framing", 4, "AS/NZS 3000"],
+      ["Underground cable protection", 4, "AS/NZS 3000"],
+      ["Aerial cables \u2014 clearance to building", 3, "AS/NZS 3000"],
+      ["Compliance Cert Electrical Work (CES)", 4, ""],
+    ],
+    "Smoke Alarms System-Wide": [
+      ["Smoke alarm in every bedroom (post-2014)", 5, "BR 2018 r110"],
+      ["Smoke alarm in path of egress", 5, "BR 2018 r110"],
+      ["Smoke alarm on each storey", 5, "BR 2018 r110"],
+      ["Hardwired smoke alarms (post-1997)", 5, "BR 2018 r110"],
+      ["Battery backup operational", 4, "AS 3786"],
+      ["Smoke alarms interconnected", 5, "BR 2018 r110"],
+      ["Smoke alarm date stamp < 10 years", 4, "AS 3786"],
+      ["Photoelectric (not ionisation) recommended", 3, "AS 3786"],
+      ["Test buttons functional on all alarms", 4, "AS 3786"],
+    ],
+    "Solar PV & Battery (if present)": [
+      ["Solar PV system capacity (kW)", 2, ""],
+      ["Inverter age and condition", 3, "AS/NZS 5033"],
+      ["DC isolators at panels accessible", 4, "AS/NZS 5033"],
+      ["AC isolator at inverter accessible", 4, "AS/NZS 5033"],
+      ["Anti-islanding compliance", 4, "AS/NZS 4777"],
+      ["Battery storage \u2014 clearances per AS 5139", 4, "AS/NZS 5139"],
+      ["Battery storage location compliance", 4, "AS/NZS 5139"],
+      ["EV charger capacity and protection", 3, "AS/NZS 3000"],
+      ["DNSP connection agreement", 2, "AS/NZS 4777"],
+    ],
+  });
+  totalAdded += addGroup("PrePurchaseBP", "\u2620\ufe0f ASBESTOS & HAZMAT", {
+    "Asbestos Containing Materials": [
+      ["Pre-1990 home \u2014 presumed-positive approach", 5, ""],
+      ["Eaves lining \u2014 fibre cement (asbestos likely pre-1985)", 5, ""],
+      ["Internal wet area sheeting (Villaboard era)", 5, ""],
+      ["Vinyl floor backing (older flooring)", 4, ""],
+      ["Roof sheeting \u2014 Super Six corrugated", 5, ""],
+      ["Fence panels \u2014 Hardiplank legacy", 4, ""],
+      ["Switchboard backing board (older boards)", 5, ""],
+      ["Pipe lagging (older lagging)", 5, ""],
+      ["Window putty (older glazing)", 3, ""],
+      ["Textured paint / popcorn ceilings", 4, ""],
+      ["Vermiculite loose-fill insulation", 5, ""],
+      ["Carport/garage cladding", 4, ""],
+      ["Recommend licensed asbestos assessor", 5, ""],
+      ["Asbestos register required if commercial", 5, ""],
+      ["No disturbance recommended pending survey", 5, ""],
+    ],
+    "Lead-Based Paint (pre-1970)": [
+      ["Painted surfaces pre-1970 \u2014 presumed lead", 4, ""],
+      ["Lead paint chipping / peeling \u2014 child risk", 5, ""],
+      ["Window sills painted (high lead-dust risk)", 4, ""],
+      ["Door frames painted (friction lead-dust)", 4, ""],
+      ["External paint flaking onto soil", 3, ""],
+      ["Recommend lead paint test kit", 3, ""],
+      ["Renovation requires lead-safe practices", 4, ""],
+    ],
+    "Other Hazardous Materials": [
+      ["SMF (synthetic mineral fibre) insulation visible", 3, ""],
+      ["Old fibreglass batts dust risk", 2, ""],
+      ["PCB capacitors (old fluorescent ballasts)", 3, ""],
+      ["Mercury thermostats", 2, ""],
+      ["Carbon monoxide risk \u2014 unflued gas heater", 5, "AS 5601"],
+      ["Radon risk \u2014 basement/sub-floor (rare in VIC)", 2, ""],
+    ],
+  });
+  totalAdded += addGroup("PrePurchaseBP", "\ud83d\udccb DOCUMENTS TO REQUEST", {
+    "Vendor & Legal": [
+      ["Section 32 vendor statement reviewed", 4, ""],
+      ["Title plan and easements identified", 4, ""],
+      ["Restrictive covenants reviewed", 3, ""],
+      ["Owners corp documents (if strata)", 3, ""],
+      ["Heritage overlay statement (if applicable)", 4, ""],
+      ["Planning permit conditions", 3, ""],
+      ["Flood overlay LSIO notes", 4, ""],
+    ],
+    "Building Permits & Compliance": [
+      ["Building permit history (council search)", 4, ""],
+      ["Occupancy Permit (post-1994)", 5, "BR 2018"],
+      ["Certificate of Final Inspection (CFI)", 5, "BR 2018"],
+      ["Compliance Certificate \u2014 Electrical", 5, ""],
+      ["Compliance Certificate \u2014 Plumbing", 5, ""],
+      ["Compliance Certificate \u2014 Gas", 5, "AS 5601"],
+      ["Compliance Certificate \u2014 Waterproofing", 5, "AS 3740"],
+      ["Engineer reports / certifications", 4, ""],
+      ["Owner-builder declaration (if applicable)", 4, ""],
+      ["Building warranty insurance (VBA)", 4, ""],
+    ],
+    "Service & Specialty Records": [
+      ["Termite warranty / treatment records", 4, "AS 3660.1"],
+      ["Pool registration & Form 23 (if pool)", 5, "BR 2018 r147"],
+      ["AESMR (if Class 1b or commercial)", 5, "BR 2018"],
+      ["Solar PV grid connection approval", 3, "AS/NZS 4777"],
+      ["Battery storage installer certificate", 3, "AS/NZS 5139"],
+      ["HWS service history", 2, ""],
+      ["HVAC service records", 2, ""],
+      ["Pest treatment history", 3, ""],
+      ["Smoke alarm installation records", 4, "AS 3786"],
+      ["Recent renovations \u2014 permits and certs", 4, ""],
+    ],
+  });
+  totalAdded += addGroup("PrePurchaseBP", "\ud83c\udf31 ENERGY & SUSTAINABILITY", {
+    "Energy Rating & Insulation": [
+      ["NatHERS rating (if known) \u2014 stars", 3, "NCC J1"],
+      ["Ceiling insulation R-value visible", 3, "NCC J1"],
+      ["Wall insulation visible (cut switch out)", 3, "NCC J1"],
+      ["Floor insulation (suspended floor)", 3, "NCC J1"],
+      ["Reflective foil sarking presence", 3, "NCC J1"],
+      ["Insulation full coverage no gaps", 3, "AS 4859"],
+      ["Window glazing type (single/double/lam)", 3, "NCC J1"],
+      ["WERS label visible on windows", 2, "NCC J1"],
+      ["Window frames thermal break", 2, "NCC J1"],
+    ],
+    "Air-Tightness & Ventilation": [
+      ["Visible air leakage points (gaps)", 2, ""],
+      ["Draught proofing of external doors", 2, ""],
+      ["Penetration sealing in ceiling", 3, "NCC F1"],
+      ["Exhaust fan ducting external", 3, "NCC F4"],
+      ["Range hood ducting external", 3, "AS 1668.2"],
+      ["Sub-floor cross-ventilation", 4, "NCC F6"],
+      ["Roof void cross-ventilation", 3, "NCC F6"],
+    ],
+    "Water & Efficiency": [
+      ["Tap WELS ratings (3-6 star)", 1, "WELS"],
+      ["Toilet WELS ratings (dual flush)", 1, "WELS"],
+      ["Shower WELS ratings (3 star min)", 1, "WELS"],
+      ["Rainwater tank capacity (if present)", 2, ""],
+      ["Greywater system (if present)", 3, ""],
+      ["Pool cover (energy saving)", 1, ""],
+    ],
+    "Generation & Storage": [
+      ["Solar PV capacity and generation", 2, "AS/NZS 5033"],
+      ["Battery storage capacity", 3, "AS/NZS 5139"],
+      ["EV charger capacity", 2, "AS/NZS 3000"],
+      ["Smart meter installed", 1, ""],
+      ["Energy monitoring system", 1, ""],
+      ["Home automation systems", 1, ""],
+    ],
+  });
+  totalAdded += addGroup("PrePurchaseBP", "\ud83d\udcd1 REPORT METADATA", {
+    "Inspector & Insurance": [
+      ["Inspector accreditation (BI-Limited/RBP-BS-U)", 5, ""],
+      ["Inspector insurance current (PI)", 5, ""],
+      ["Inspector reg number cited", 4, ""],
+      ["No conflict of interest declaration", 4, ""],
+      ["Engagement letter signed", 4, ""],
+      ["Fee structure documented", 3, ""],
+    ],
+    "Scope & Limitations": [
+      ["Inspection scope per AS 4349.1", 5, "AS 4349.1"],
+      ["Pest inspection scope per AS 4349.3", 5, "AS 4349.3"],
+      ["Areas not inspected listed", 5, "AS 4349.1"],
+      ["Areas of concealment listed", 4, "AS 4349.1"],
+      ["No destructive testing performed", 4, "AS 4349.1"],
+      ["Weather on inspection day documented", 3, ""],
+      ["Time of inspection documented", 2, ""],
+      ["Property occupancy status (occupied/vacant)", 2, ""],
+    ],
+    "Severity Glossary & Action": [
+      ["Severity scale defined in report (1-5)", 4, ""],
+      ["Action priority matrix (urgent/important/monitor)", 4, ""],
+      ["Cost-impact estimates (range, with disclaimer)", 3, ""],
+      ["Re-inspection recommendations", 3, ""],
+      ["Pre-settlement walk-through advisable", 3, ""],
+      ["Specialist trade referrals listed", 3, ""],
+    ],
+    "Evidence & Photo Log": [
+      ["Every defect photographed", 5, ""],
+      ["Photo metadata (date/location)", 4, ""],
+      ["Reference scale in critical photos", 3, ""],
+      ["Photo log indexed in appendix", 4, ""],
+      ["Video walkthrough optional", 2, ""],
+      ["Drone photos for inaccessible roofs", 2, ""],
+    ],
+  });
+  totalAdded += addGroup("PrePurchaseBP", "\ud83d\udd25 BUSHFIRE (BAL) \u2014 IF APPLICABLE", {
+    "BAL Assessment": [
+      ["BAL rating known \u2014 LOW/12.5/19/29/40/FZ", 5, "AS 3959"],
+      ["BAL assessment date and methodology", 4, "AS 3959"],
+      ["Vegetation class assessed", 4, "AS 3959"],
+      ["Slope and distance measurements", 4, "AS 3959"],
+      ["FDI used in calculation", 3, "AS 3959"],
+    ],
+    "Construction Features": [
+      ["Roof gutters ember-protected (1mm mesh)", 4, "AS 3959"],
+      ["Roof penetrations sealed", 4, "AS 3959"],
+      ["Eaves construction (sealed, no openings)", 4, "AS 3959"],
+      ["Vents 1mm mesh", 4, "AS 3959"],
+      ["Window glazing per BAL rating", 5, "AS 3959"],
+      ["Window frames per BAL rating", 4, "AS 3959"],
+      ["External wall construction per BAL", 5, "AS 3959"],
+      ["External door per BAL rating", 4, "AS 3959"],
+      ["Decking material per BAL rating", 4, "AS 3959"],
+      ["Sub-floor enclosure (BAL 29+)", 4, "AS 3959"],
+    ],
+    "Asset Protection Zone (APZ)": [
+      ["APZ width per BAL/local council", 4, ""],
+      ["Vegetation within APZ managed", 4, ""],
+      ["Fuel reduction recommendations", 3, ""],
+      ["Water supply for firefighting", 4, ""],
+      ["Access for fire trucks", 4, ""],
+    ],
+  });
+  totalAdded += addGroup("PrePurchaseBP", "\ud83c\udfdb\ufe0f HERITAGE \u2014 IF APPLICABLE", {
+    "Heritage Overlay Status": [
+      ["Heritage overlay in place", 5, ""],
+      ["Heritage statement of significance", 4, ""],
+      ["Permit triggers for works", 5, ""],
+      ["VHR vs HO grading", 4, ""],
+      ["Heritage advisor recommended", 3, ""],
+    ],
+    "Original Fabric": [
+      ["Original windows preserved", 3, ""],
+      ["Original doors preserved", 3, ""],
+      ["Original brickwork visible", 3, ""],
+      ["Original cornice and ceiling roses", 2, ""],
+      ["Original fireplaces", 2, ""],
+      ["Original timber detailing", 2, ""],
+      ["Subsequent additions sympathetic", 2, ""],
+      ["Inappropriate alterations identified", 3, ""],
+    ],
+    "Heritage-Sensitive Repairs": [
+      ["Mortar mix appropriate (lime-based)", 4, ""],
+      ["Repointing using compatible material", 4, ""],
+      ["Render repair using lime render", 3, ""],
+      ["Roof material consistent with era", 3, ""],
+      ["Paint colours per heritage palette", 2, ""],
+      ["Reversibility of alterations", 3, ""],
+    ],
+  });
+
+  /* ===== StagePrePour ===== */
+  totalAdded += addGroup("StagePrePour", "\ud83c\udf0d SOIL & GEOTECHNICAL", {
+    "Soil Investigation": [
+      ["Geotechnical report on site", 5, "AS 2870"],
+      ["Site classification confirmed (A/S/M/H1/H2/P/E)", 5, "AS 2870"],
+      ["Bore log locations identified", 4, "AS 2870"],
+      ["Bearing capacity adequate per design", 5, "AS 2870"],
+      ["Reactive clay (H-class) treatment per design", 5, "AS 2870"],
+      ["Fill identified \u2014 engineered vs uncontrolled", 5, "AS 2870"],
+      ["Cut/fill levels match plans", 4, "AS 2870"],
+      ["Excavation depth into competent bearing", 5, "AS 2870"],
+      ["Soft spots in excavation identified", 5, ""],
+      ["Water table encountered", 4, ""],
+      ["Rock encountered \u2014 drilling/blasting required", 4, ""],
+      ["Slope stability \u2014 battered or shored", 4, "AS 3798"],
+      ["Adjacent foundations protected", 4, "AS 3798"],
+    ],
+  });
+  totalAdded += addGroup("StagePrePour", "\ud83d\udca6 SITE DRAINAGE", {
+    "Surface & Storm Water": [
+      ["Surface water diverted from excavation", 4, ""],
+      ["Trench drainage to safe discharge", 4, ""],
+      ["Excavation pumped if water entering", 4, ""],
+      ["Future storm water pits marked", 3, "AS 3500.3"],
+      ["Future overland flow path identified", 3, "AS 3500.3"],
+      ["Sub-soil drainage at footings (if required)", 4, ""],
+      ["Erosion and sediment control on site", 3, ""],
+      ["Adjacent crossover protected", 2, ""],
+    ],
+  });
+  totalAdded += addGroup("StagePrePour", "\ud83d\udccb PRE-POUR DOCUMENTS", {
+    "Documentation On Site": [
+      ["Engineering drawings on site", 5, ""],
+      ["Soil report on site", 5, "AS 2870"],
+      ["Termite management plan documented", 4, "AS 3660.1"],
+      ["Building permit current and visible", 5, "BR 2018"],
+      ["Approved plans stamped on site", 4, ""],
+      ["Engineer pre-pour certificate signed", 5, ""],
+      ["Mandatory notification to RBS lodged", 5, "BR 2018 r214"],
+      ["Concrete mix design submitted", 4, "AS 3600"],
+      ["Slump test plan agreed", 3, "AS 1379"],
+      ["Cylinder testing arrangement", 3, "AS 1012"],
+      ["Curing plan documented", 3, "AS 3600"],
+    ],
+  });
+
+  /* ===== StageFrame ===== */
+  totalAdded += addGroup("StageFrame", "\ud83e\udeb5 ENGINEERED TIMBER", {
+    "LVL / I-Joists / Glulam": [
+      ["LVL beam grade and size verified", 5, "AS 1684"],
+      ["LVL manufacturer markings visible", 4, "AS 1684"],
+      ["LVL bearings adequate (75mm min)", 5, "AS 1684"],
+      ["LVL no notches or holes beyond spec", 5, "AS 1684"],
+      ["I-joist depth and grade verified", 5, "AS 1684"],
+      ["I-joist web stiffeners at supports", 4, "AS 1684"],
+      ["I-joist services through pre-knockouts only", 4, "AS 1684"],
+      ["Glulam beam grade and lamination direction", 5, "AS 1684"],
+      ["Glulam protected from weather during build", 4, ""],
+      ["Connectors compatible with engineered timber", 4, "AS 1684"],
+      ["Manufacturer load tables on site", 3, "AS 1684"],
+    ],
+  });
+  totalAdded += addGroup("StageFrame", "\ud83d\udd29 STEEL FRAMING (if present)", {
+    "Steel Frame Components": [
+      ["Steel frame system per design", 5, "AS/NZS 4600"],
+      ["Steel stud gauge and grade", 5, "AS/NZS 4600"],
+      ["Tek screw type and spacing", 4, "AS/NZS 4600"],
+      ["Corrosion coating Z275 minimum", 4, "AS/NZS 4600"],
+      ["Cut edges treated against corrosion", 3, "AS/NZS 4600"],
+      ["Wet area protection coating", 4, "AS/NZS 4600"],
+      ["Connection plates per design", 5, "AS/NZS 4600"],
+      ["Thermal break at slab connection", 3, "NCC J1"],
+    ],
+  });
+  totalAdded += addGroup("StageFrame", "\ud83d\udd17 CONNECTIONS AUDIT", {
+    "Connections & Fixings": [
+      ["Triple grip joist hangers galvanised", 4, "AS 1684"],
+      ["Joist hanger nails full count", 4, "AS 1684"],
+      ["Hold-down strap nails count and type", 4, "AS 1684"],
+      ["Trip-L-grip at corners", 4, "AS 1684"],
+      ["Plate bracing connections", 5, "AS 1684"],
+      ["Lintel-to-trimmer bolts/screws", 5, "AS 1684"],
+      ["Truss-to-girder truss connection", 5, "AS 4440"],
+      ["Skew nail count at top plate", 3, "AS 1684"],
+      ["Multi-ply truss bolts fully tightened", 5, "AS 4440"],
+      ["Connector galvanising consistent", 3, ""],
+    ],
+  });
+  totalAdded += addGroup("StageFrame", "\ud83d\udccb FRAME DOCUMENTS", {
+    "Documentation": [
+      ["Frame layout drawings on site", 4, ""],
+      ["Truss layout signed off", 5, "AS 4440"],
+      ["Bracing schedule signed off", 5, "AS 1684"],
+      ["Engineer variations on file", 5, ""],
+      ["Truss fabricator engineer certificate", 5, "AS 4440"],
+      ["Wind classification confirmed", 5, "AS 4055"],
+      ["Frame timber treatment certs", 4, "AS 1604"],
+      ["Mandatory notification \u2014 Stage 2 lodged", 5, "BR 2018 r215"],
+    ],
+  });
+
+  /* ===== StageLockup ===== */
+  totalAdded += addGroup("StageLockup", "\ud83e\ude9f GLAZING DETAIL (AS 1288)", {
+    "Safety Glass Compliance": [
+      ["Safety glass within 500mm of door", 5, "AS 1288"],
+      ["Safety glass below 800mm AFFL in wet areas", 5, "AS 1288"],
+      ["Safety glass in shower screens (Grade A)", 5, "AS 1288"],
+      ["Safety glass in low-level windows", 5, "AS 1288"],
+      ["Glass stamp / certification visible", 4, "AS 1288"],
+      ["Toughened vs laminated identified", 4, "AS 1288"],
+      ["Glazing energy spec matches NatHERS", 3, "NCC J1"],
+      ["Window restrictor compliance (bedrooms > 2m)", 5, "NCC H3D9"],
+    ],
+  });
+  totalAdded += addGroup("StageLockup", "\ud83e\ude9f WINDOW FRAMES (AS 2047)", {
+    "Frame & Hardware": [
+      ["Window certification per AS 2047", 5, "AS 2047"],
+      ["Window wind rating per BAL/zone", 5, "AS 2047"],
+      ["Window weep paths clear", 4, "AS 2047"],
+      ["Window glazing wedges packed", 3, "AS 2047"],
+      ["Sliding window roller condition", 2, ""],
+      ["Awning window stays operational", 2, ""],
+      ["Casement window operation", 2, ""],
+      ["Double hung sash balance", 2, ""],
+      ["Window locks fitted", 3, ""],
+      ["Insect screen fitted and tensioned", 1, ""],
+    ],
+  });
+  totalAdded += addGroup("StageLockup", "\ud83d\udd25 FIRE-RATING COMPLIANCE", {
+    "Fire Separation": [
+      ["Garage-to-house separating wall fire rated", 5, "NCC E1"],
+      ["Garage internal door fire rated + self-closing", 5, "NCC E1.5"],
+      ["Party walls fire rated (semi-detached)", 5, "NCC E1"],
+      ["Penetrations through fire walls sealed", 5, "NCC E1"],
+      ["Service penetration fire collars", 5, "NCC E1"],
+      ["Smoke alarm circuit independent", 4, "AS 3786"],
+      ["Eaves fire rating per BAL (if BAL applies)", 4, "AS 3959"],
+    ],
+  });
+  totalAdded += addGroup("StageLockup", "\ud83d\udccb LOCKUP DOCUMENTS", {
+    "Compliance": [
+      ["Window WERS labels filed", 3, "NCC J1"],
+      ["Insulation product certificates", 3, "AS 4859"],
+      ["Cladding manufacturer warranties", 3, ""],
+      ["Roofing manufacturer warranty", 3, ""],
+      ["Gas pipework test record", 5, "AS 5601"],
+      ["Electrical rough-in compliance pending", 4, ""],
+      ["Plumbing rough-in compliance pending", 4, ""],
+    ],
+  });
+
+  /* ===== StageWaterproofing ===== */
+  totalAdded += addGroup("StageWaterproofing", "\ud83d\udd2c SUBSTRATE PREP AUDIT", {
+    "Pre-Application Conditions": [
+      ["Substrate cleanliness photo log", 3, "AS 3740"],
+      ["Substrate moisture readings recorded", 4, "AS 3740"],
+      ["Substrate cracks pre-treated", 4, "AS 3740"],
+      ["Primer brand and batch documented", 4, "AS 3740"],
+      ["Primer coverage uniformity", 3, "AS 3740"],
+      ["Substrate flatness \u00b1 5mm in 3m", 3, "AS 3740"],
+      ["Hob downturns formed correctly", 4, "AS 3740"],
+      ["Falls established to waste pre-membrane", 5, "AS 3740"],
+      ["Drain flanges installed level with substrate", 5, "AS 3740"],
+    ],
+  });
+  totalAdded += addGroup("StageWaterproofing", "\ud83d\udcf8 PHOTO EVIDENCE", {
+    "Required Photo Records": [
+      ["Photo before primer", 3, ""],
+      ["Photo after primer", 3, ""],
+      ["Photo after first coat", 4, ""],
+      ["Photo after second coat", 4, ""],
+      ["Photo of every penetration sealed", 5, "AS 3740"],
+      ["Photo of every internal corner / hob", 4, "AS 3740"],
+      ["Photo during flood test (24hr)", 4, "AS 3740"],
+      ["Photo before tiles applied", 4, "AS 3740"],
+      ["Photos geotagged where possible", 2, ""],
+    ],
+  });
+  totalAdded += addGroup("StageWaterproofing", "\ud83e\uddea TESTING RECORDS", {
+    "Flood Test & Documentation": [
+      ["24-hour flood test conducted", 5, "AS 3740"],
+      ["Test water depth photographed", 4, "AS 3740"],
+      ["Test start and end timestamps", 4, "AS 3740"],
+      ["Adjacent areas inspected during test", 4, "AS 3740"],
+      ["No leaks observed below", 5, "AS 3740"],
+      ["Test certificate signed by installer", 5, "AS 3740"],
+      ["Tile adhesive compatible with membrane", 3, ""],
+      ["Cure time observed before tiling (per spec)", 4, "AS 3740"],
+    ],
+  });
+  totalAdded += addGroup("StageWaterproofing", "\ud83c\udfab LICENSING & WARRANTY", {
+    "Installer Credentials": [
+      ["Waterproofer licensed VIC (registered)", 5, "BR 2018"],
+      ["Licence number on certificate", 5, ""],
+      ["Manufacturer system warranty (e.g. 25 yr)", 4, ""],
+      ["Workmanship warranty 7 years minimum", 4, ""],
+      ["Compliance Cert Waterproofing issued", 5, "BR 2018"],
+      ["Insurance certificate of currency", 4, ""],
+    ],
+  });
+
+  /* ===== StageFixing ===== */
+  totalAdded += addGroup("StageFixing", "\ud83e\ude9a JOINERY DEEP", {
+    "Cabinetry Quality": [
+      ["Cabinet door overlay \u00b1 1mm consistent", 3, "GST&T 13.05"],
+      ["Drawer gap consistency front-to-back", 3, "GST&T 13.05"],
+      ["Cabinet face frame square", 3, ""],
+      ["Internal cabinet sheet finish", 2, ""],
+      ["Kicker plate level and seal", 2, ""],
+      ["Soft-close on all drawers", 1, ""],
+      ["Soft-close on all doors", 1, ""],
+      ["Drawer runners \u2014 full extension", 2, ""],
+      ["Drawer side material consistency", 1, ""],
+      ["Pantry shelf adjustable pin pattern", 1, ""],
+      ["WIR hanging rail load tested", 2, ""],
+      ["WIR drawer extension to back", 2, ""],
+      ["Cabinet hardware finish consistent", 1, ""],
+      ["Handle alignment height and centres", 2, "GST&T 13.05"],
+    ],
+    "Benchtops": [
+      ["Bench level \u2014 flat \u2264 3mm in 2m", 3, "GST&T 13.04"],
+      ["Bench-to-wall scribe quality", 3, "GST&T 13.04"],
+      ["Bench joints \u2014 sealants, level", 3, "GST&T 13.04"],
+      ["Bench cantilever support adequate", 3, "GST&T 13.04"],
+      ["Sink cutout \u2014 neat, supported", 3, ""],
+      ["Cooktop cutout per manufacturer", 4, "AS 5601"],
+      ["Tap hole locations correct", 2, ""],
+      ["Splashback fitted and sealed", 3, ""],
+      ["Stone slab thickness verified", 2, ""],
+    ],
+  });
+  totalAdded += addGroup("StageFixing", "\ud83d\udebf PLUMBING FIXTURES AUDIT", {
+    "Fixture Installation": [
+      ["All fixtures level and plumb", 3, ""],
+      ["Tap operation smooth, no leaks", 4, "AS 3500"],
+      ["Mixer temperature control range", 3, "AS 3500"],
+      ["Showerhead flow rate (WELS)", 1, "WELS"],
+      ["Toilet pan secure, base sealed", 4, "AS 3740"],
+      ["Toilet cistern function and seal", 3, ""],
+      ["Bath secured and sealed", 4, "AS 3740"],
+      ["Bath waste and overflow function", 3, ""],
+      ["Vanity basin drainage", 3, ""],
+      ["Trough drainage and seal", 2, ""],
+      ["Washing machine tap operation", 3, "AS 3500"],
+      ["Tempering valve 50\u00b0C set + cert", 5, "AS 3500.4"],
+      ["Visible leaks at any fixture", 5, "AS 3500"],
+      ["Drainage performs (no slow flow)", 4, "AS 3500"],
+    ],
+  });
+  totalAdded += addGroup("StageFixing", "\ud83e\uddf1 TILING TOLERANCES (AS 3958)", {
+    "Tile Installation Quality": [
+      ["Floor tile lippage random check \u2264 2mm", 4, "GST&T 11.09"],
+      ["Wall tile lippage random check \u2264 2mm", 4, "AS 3958"],
+      ["Grout line straightness \u00b1 1mm", 3, "GST&T 11.06"],
+      ["Mitre cuts at internal corners", 3, "GST&T 11.09"],
+      ["Tile cut neatness at edges", 2, ""],
+      ["Tile bullnose / trim selection", 2, ""],
+      ["Tile pattern alignment continuous", 2, ""],
+      ["Tile drumminess test (random)", 4, "AS 3958"],
+      ["Movement joints in fields", 3, "AS 3958"],
+      ["Silicone bead at all junctions", 4, "AS 3740"],
+    ],
+  });
+  totalAdded += addGroup("StageFixing", "\ud83d\udccb FIXING DOCUMENTS", {
+    "Compliance & Quality": [
+      ["Compliance Cert Electrical fit-off", 5, ""],
+      ["Compliance Cert Plumbing fit-off", 5, ""],
+      ["Gas Compliance Cert (if gas)", 5, "AS 5601"],
+      ["Waterproofing Cert on file", 5, "AS 3740"],
+      ["Manufacturer warranties (appliances)", 2, ""],
+      ["Manufacturer warranties (tiles)", 2, ""],
+      ["Workmanship guarantees", 3, ""],
+    ],
+  });
+
+  /* ===== StagePCI ===== */
+  totalAdded += addGroup("StagePCI", "\ud83d\udcdc FINAL COMPLIANCE CERTIFICATES", {
+    "All Certificates Required": [
+      ["Occupancy Permit / Certificate of Final Inspection", 5, "BR 2018"],
+      ["Compliance Cert \u2014 Electrical (all stages)", 5, ""],
+      ["Compliance Cert \u2014 Plumbing (all stages)", 5, ""],
+      ["Compliance Cert \u2014 Gas", 5, "AS 5601"],
+      ["Compliance Cert \u2014 Waterproofing each wet area", 5, "AS 3740"],
+      ["Compliance Cert \u2014 Termite Management", 4, "AS 3660.1"],
+      ["Energy efficiency final report", 4, "NCC J1"],
+      ["Engineer certifications (foundations, frame)", 5, ""],
+      ["Smoke alarm compliance certificate", 5, "BR 2018 r110"],
+      ["Glazing safety glass certificate", 4, "AS 1288"],
+      ["Pool fence Form 23 (if pool)", 5, "BR 2018 r147"],
+    ],
+  });
+  totalAdded += addGroup("StagePCI", "\ud83d\udccb DEFECT REGISTER", {
+    "Defects Walk-Through": [
+      ["Defect list compiled with builder", 5, ""],
+      ["Defect list dated and signed", 5, ""],
+      ["Each defect photographed", 4, ""],
+      ["Each defect severity classified", 4, ""],
+      ["Rectification timeframe agreed", 4, ""],
+      ["Re-inspection scheduled", 4, ""],
+      ["Retention held for defects (% of contract)", 4, ""],
+      ["Touch-up paint list", 2, "GST&T 12.02"],
+      ["Missing items / appliances list", 3, ""],
+    ],
+  });
+  totalAdded += addGroup("StagePCI", "\ud83e\udd1d OWNER HANDOVER", {
+    "Handover Process": [
+      ["Walkthrough with builder conducted", 4, ""],
+      ["Key handover documented", 3, ""],
+      ["Remote controls / fobs handed over", 2, ""],
+      ["Alarm codes provided and changed", 3, ""],
+      ["Smart home credentials handed over", 2, ""],
+      ["Stop tap location demonstrated", 4, ""],
+      ["Switchboard demonstrated", 3, ""],
+      ["Smoke alarm test demonstrated", 4, ""],
+      ["Tempering valve location shown", 3, "AS 3500.4"],
+      ["HVAC controls explained", 2, ""],
+      ["Garage door programming", 2, ""],
+    ],
+  });
+  totalAdded += addGroup("StagePCI", "\ud83d\udcd8 MAINTENANCE MANUAL", {
+    "Owner Documentation Pack": [
+      ["As-built drawings provided", 4, ""],
+      ["Appliance manuals indexed", 2, ""],
+      ["Warranty registrations completed", 3, ""],
+      ["Service contact list provided", 2, ""],
+      ["Maintenance schedule recommended", 3, ""],
+      ["Termite annual inspection reminder", 4, "AS 3660.1"],
+      ["Smoke alarm 10-year replacement date", 4, "AS 3786"],
+      ["HWS service intervals noted", 2, ""],
+      ["HVAC service intervals noted", 2, ""],
+      ["Gas safety check (rental) reminder", 4, "RTR 2021 r45"],
+    ],
+  });
+
+  /* ===== PoolSafety ===== */
+  totalAdded += addGroup("PoolSafety", "\u26a1 POOL EQUIPMENT & ELECTRICAL", {
+    "Pump, Filter, Heater, Lighting": [
+      ["Pool pump RCD protected", 5, "AS/NZS 3000"],
+      ["Pump shed/cabinet enclosed if required", 3, "AS 1926.1"],
+      ["Pool lighting IPX rating per zone", 5, "AS/NZS 3000"],
+      ["Pool lighting bonding (12V SELV)", 5, "AS/NZS 3000"],
+      ["Pool light cable conduit", 4, "AS/NZS 3000"],
+      ["Pool heater compliance (gas/elec)", 4, "AS 5601"],
+      ["Heat pump unit clearances", 3, ""],
+      ["Chemical storage compliance", 3, ""],
+      ["Salt chlorinator function", 2, ""],
+      ["Equipment area drainage", 2, ""],
+    ],
+  });
+  totalAdded += addGroup("PoolSafety", "\ud83d\udec1 SPA SPECIFICS", {
+    "Spa Compliance": [
+      ["Spa < 300mm depth \u2014 barrier exemption check", 4, "AS 1926.1"],
+      ["Spa lid compliance (AS 1926.3 if barrier)", 4, "AS 1926.3"],
+      ["Spa cover lockable", 4, "AS 1926.3"],
+      ["Spa electrical isolation accessible", 5, "AS/NZS 3000"],
+      ["Spa drainage compliance", 3, ""],
+      ["Spa equipment compartment locked", 3, ""],
+    ],
+  });
+  totalAdded += addGroup("PoolSafety", "\ud83e\udea8 POOL DECK SAFETY", {
+    "Surrounds": [
+      ["Pool deck slip resistance (P3+)", 4, "AS 4586"],
+      ["Pool surround drainage", 3, ""],
+      ["Pool coping condition", 2, ""],
+      ["No trip hazards in pool zone", 3, ""],
+      ["Pool depth markers visible", 2, ""],
+      ["Pool entry steps slip-resistant", 4, "AS 4586"],
+    ],
+  });
+  totalAdded += addGroup("PoolSafety", "\ud83d\udccb POOL DOCUMENTS", {
+    "Statutory Records": [
+      ["Pool registered with council", 5, "BR 2018"],
+      ["Form 23 certificate current", 5, "BR 2018 r147"],
+      ["Pool fence compliance date", 5, "BR 2018"],
+      ["Last inspection date by council", 4, "BR 2018"],
+      ["CPR sign current (latest version)", 4, "AS 1926.1"],
+      ["Pool safety education for occupants", 2, ""],
+    ],
+  });
+  totalAdded += addGroup("PoolSafety", "\ud83d\udd27 MAINTENANCE", {
+    "Ongoing Compliance": [
+      ["Pool barrier maintained \u2014 no degradation", 4, "AS 1926.1"],
+      ["Gate spring tension maintained", 4, "AS 1926.1"],
+      ["Gate latch maintained", 4, "AS 1926.1"],
+      ["Vegetation re-encroachment check (NCZ)", 4, "AS 1926.1"],
+      ["Pool water chemistry safe", 2, ""],
+      ["Lifesaving equipment present", 3, ""],
+      ["Recurring barrier audit (annual)", 4, "AS 1926.1"],
+    ],
+  });
+
+  /* ===== Dilapidation ===== */
+  totalAdded += addGroup("Dilapidation", "\ud83d\udcd0 MEASUREMENT METHODOLOGY", {
+    "Measurement Standards": [
+      ["Crack widths measured with crack gauge", 4, "CSIRO BCC 21"],
+      ["Crack widths classified (Cat 0-4)", 4, "CSIRO BCC 21"],
+      ["Lean measured with plumb bob / digital", 3, ""],
+      ["Floor level measured with laser", 3, "GST&T 2.08"],
+      ["Wall straightness measured", 3, "GST&T 9.13"],
+      ["Door square test (diagonal)", 2, "GST&T 8.04"],
+      ["Tile lippage measured", 3, "GST&T 11.09"],
+      ["Moisture meter readings recorded", 4, ""],
+      ["Measurement equipment listed", 2, ""],
+    ],
+  });
+  totalAdded += addGroup("Dilapidation", "\ud83d\udcf7 PHOTO STANDARDS", {
+    "Photo Documentation": [
+      ["Macro photos with scale (ruler/coin)", 4, ""],
+      ["Wide context photos of each elevation", 4, ""],
+      ["Each room from multiple angles", 4, ""],
+      ["Each defect close-up + context", 4, ""],
+      ["Date/time metadata preserved", 4, ""],
+      ["Drone photos for inaccessible areas", 2, ""],
+      ["Video walkthrough recorded", 3, ""],
+      ["Photo index in appendix", 4, ""],
+      ["Photos geotagged where possible", 2, ""],
+    ],
+  });
+  totalAdded += addGroup("Dilapidation", "\ud83d\udccd REFERENCE POINTS", {
+    "Triangulation & Benchmarks": [
+      ["Benchmark established on site", 3, ""],
+      ["Triangulation reference points marked", 3, ""],
+      ["Survey peg locations photographed", 3, ""],
+      ["Title plan dimensions verified", 4, ""],
+      ["Adjacent property reference points", 3, ""],
+      ["Existing crack monitoring tells", 3, ""],
+      ["Crack monitoring telltales installed (if needed)", 3, ""],
+    ],
+  });
+  totalAdded += addGroup("Dilapidation", "\ud83d\udccb DILAPIDATION DOCUMENTS", {
+    "Engagement & Outputs": [
+      ["Engagement letter signed", 5, ""],
+      ["Scope defined (pre-construction / post-construction)", 5, ""],
+      ["Construction activity adjacent identified", 4, ""],
+      ["Construction works program reviewed", 3, ""],
+      ["Adjoining owners notified (if required)", 4, ""],
+      ["Report distributed before works commence", 5, ""],
+      ["Re-inspection plan agreed", 4, ""],
+    ],
+  });
+  totalAdded += addGroup("Dilapidation", "\u2696\ufe0f CAUSATION ANALYSIS", {
+    "Linking Damage to Cause": [
+      ["Pre-existing condition documented", 5, ""],
+      ["Pre-existing condition photographed", 5, ""],
+      ["Cracks dated where possible", 4, "CSIRO BCC 21"],
+      ["Subsidence vs settlement distinguished", 4, "CSIRO BCC 21"],
+      ["Vibration sources identified", 4, ""],
+      ["Excavation proximity noted", 4, ""],
+      ["Demolition impact zone", 4, ""],
+      ["Specialist engineer opinion if needed", 4, ""],
+    ],
+  });
+
+  /* ===== RentalMinimumStd ===== */
+  totalAdded += addGroup("RentalMinimumStd", "\ud83e\ude9f WINDOW SAFETY", {
+    "Cord Safety & Restrictors": [
+      ["Window cord safety per RTR 2021 r56", 5, "RTR 2021 r56"],
+      ["Cord cleats or wind-up devices fitted", 4, "AS 4828.2"],
+      ["No accessible cords near bed/cot", 5, "AS 4828.2"],
+      ["Window restrictor where sill < 1.7m AFFL", 5, "NCC H3D9"],
+      ["Window opens > 12.5cm without restrictor \u2014 non-compliant", 5, "NCC H3D9"],
+      ["Window locks functional (each operable sash)", 4, ""],
+    ],
+  });
+  totalAdded += addGroup("RentalMinimumStd", "\ud83d\udd25 HEATING EFFICIENCY (2025 Standard)", {
+    "Energy Rating Compliance": [
+      ["Fixed heater in main living room", 5, "RTR 2021 r42"],
+      ["Energy-efficient heater (post 29 Mar 2025)", 5, "RTR 2021 r42"],
+      ["Heater star rating (2-star min for gas)", 4, "RTR 2021 r42"],
+      ["Reverse-cycle AC accepted as compliant", 4, "RTR 2021 r42"],
+      ["Hydronic heating accepted as compliant", 4, "RTR 2021 r42"],
+      ["Heater serviced records (2 years)", 4, "RTR 2021 r42"],
+      ["Heater operational at inspection", 5, ""],
+    ],
+  });
+  totalAdded += addGroup("RentalMinimumStd", "\ud83e\uddfe STATUTORY SAFETY CHECKS", {
+    "Documentation Required": [
+      ["Gas safety check certificate current (\u2264 2 years)", 5, "RTR 2021 r45"],
+      ["Electrical safety check certificate current (\u2264 2 years)", 5, "RTR 2021 r47"],
+      ["Smoke alarm service record (annual)", 5, "AS 3786"],
+      ["Smoke alarm replacement dates within 10yr", 5, "AS 3786"],
+      ["Tempering valve test record", 4, "AS 3500.4"],
+      ["Pool barrier inspection (if pool)", 5, "BR 2018"],
+      ["Asbestos register (if pre-1990 & known ACM)", 4, ""],
+      ["Lead paint risk noted (if pre-1970)", 3, ""],
+    ],
+  });
+  totalAdded += addGroup("RentalMinimumStd", "\ud83d\udc00 PEST EVIDENCE", {
+    "Vermin & Insects": [
+      ["No rodent activity (droppings, gnawing)", 4, "RTR 2021"],
+      ["No cockroach activity", 3, "RTR 2021"],
+      ["No ant infestation", 2, "RTR 2021"],
+      ["No termite activity", 5, "AS 4349.3"],
+      ["Pest treatment history available", 3, ""],
+      ["Property vermin-proof \u2014 no entry points", 4, "RTR 2021"],
+      ["Bin storage compliant \u2014 no vermin attraction", 2, ""],
+    ],
+  });
+  totalAdded += addGroup("RentalMinimumStd", "\ud83e\udda0 MOULD ASSESSMENT", {
+    "Mould & Damp": [
+      ["Property free of mould (RTR 2021)", 5, "RTR 2021"],
+      ["Bathroom mould-free", 5, "RTR 2021"],
+      ["Ceiling mould-free", 4, "RTR 2021"],
+      ["Window reveal mould-free", 3, "RTR 2021"],
+      ["Silicone seal mould-free", 4, ""],
+      ["Underlying moisture source identified", 4, ""],
+      ["Ventilation adequate for mould prevention", 4, "NCC F4"],
+    ],
+  });
+
+  /* ===== RentalStandards ===== */
+  totalAdded += addGroup("RentalStandards", "\ud83e\ude9f WINDOW SAFETY ANNUAL", {
+    "Cord & Restrictor Check": [
+      ["Window cord safety annual check", 5, "RTR 2021 r56"],
+      ["Restrictor function each operable window", 5, "NCC H3D9"],
+      ["Window locks function", 3, ""],
+    ],
+  });
+  totalAdded += addGroup("RentalStandards", "\ud83e\uddfe ANNUAL COMPLIANCE", {
+    "Required Records": [
+      ["Gas safety check current", 5, "RTR 2021 r45"],
+      ["Electrical safety check current", 5, "RTR 2021 r47"],
+      ["Smoke alarm annual service", 5, "AS 3786"],
+      ["Pool barrier annual audit (if pool)", 5, "AS 1926.1"],
+      ["Tempering valve test record", 4, "AS 3500.4"],
+      ["Termite annual inspection", 3, "AS 4349.3"],
+    ],
+  });
+  totalAdded += addGroup("RentalStandards", "\ud83d\udc00 PEST & MOULD ANNUAL", {
+    "Hygiene Check": [
+      ["Vermin-free check", 4, "RTR 2021"],
+      ["Mould-free check all rooms", 5, "RTR 2021"],
+      ["Ventilation operating in wet areas", 4, "NCC F4"],
+      ["Damp signs investigated", 4, ""],
+    ],
+  });
+
+  /* ===== AsBuiltIllegal ===== */
+  totalAdded += addGroup("AsBuiltIllegal", "\ud83c\udfdb\ufe0f COUNCIL RECORDS SEARCH", {
+    "Permit History": [
+      ["Council permit history requested", 5, "BR 2018"],
+      ["Plans on file matched to site", 5, ""],
+      ["Final inspection records for past permits", 4, ""],
+      ["Occupancy Permit current vs as-built", 5, ""],
+      ["Enforcement orders on file", 5, ""],
+      ["Heritage overlay implications", 4, ""],
+      ["Planning permit conditions reviewed", 4, ""],
+    ],
+  });
+  totalAdded += addGroup("AsBuiltIllegal", "\ud83d\udcd0 PLANNING COMPLIANCE", {
+    "ResCode / VPP Compliance": [
+      ["Site coverage \u2264 60% (Reg 80)", 4, "BR 2018 r80"],
+      ["Site permeability \u2265 20% (Reg 81)", 4, "BR 2018 r81"],
+      ["Front setback (Reg 79)", 5, "BR 2018 r79"],
+      ["Side and rear setback (Reg 79)", 5, "BR 2018 r79"],
+      ["Building height \u2264 9m (Reg 85)", 4, "BR 2018 r85"],
+      ["Walls on boundary (Reg 86)", 4, "BR 2018 r86"],
+      ["Daylight to existing windows (Reg 87)", 4, "BR 2018 r87"],
+      ["Overshadowing (Reg 88)", 4, "BR 2018 r88"],
+      ["Overlooking (Reg 84)", 5, "BR 2018 r84"],
+      ["Private open space (Reg 89)", 4, "BR 2018 r89"],
+      ["Car parking provision (Reg 82)", 3, "BR 2018 r82"],
+    ],
+  });
+  totalAdded += addGroup("AsBuiltIllegal", "\ud83d\udd2c ENGINEER ASSESSMENT", {
+    "Structural Compliance": [
+      ["Structural engineer review required", 5, ""],
+      ["Footing design adequate (visible)", 5, "AS 2870"],
+      ["Wall frame compliant AS 1684", 5, "AS 1684"],
+      ["Bracing compliance (retrofit if needed)", 5, "AS 1684"],
+      ["Tie-down compliance", 5, "AS 1684"],
+      ["Lintel adequacy", 5, "AS 1684"],
+      ["Roof structure compliance", 5, "AS 1684"],
+      ["Concealed defects probability", 4, ""],
+      ["Destructive testing recommended", 4, ""],
+    ],
+  });
+  totalAdded += addGroup("AsBuiltIllegal", "\ud83d\udccb RECTIFICATION PATHWAY", {
+    "Statutory & Practical": [
+      ["Building Permit retrospective application", 5, "BR 2018"],
+      ["Section 30 Building Order possibility", 4, "Building Act 1993"],
+      ["Demolition / removal cost-benefit", 4, ""],
+      ["Owner-builder warranty implications", 4, ""],
+      ["Statutory declaration prepared", 4, ""],
+      ["Council enforcement status", 5, ""],
+      ["VBA / VCAT pathway if dispute", 4, ""],
+      ["Cost estimate range for rectification", 3, ""],
+      ["Insurance implications", 3, ""],
+    ],
+  });
+
+  /* ===== SpecialPurpose ===== */
+  totalAdded += addGroup("SpecialPurpose", "\ud83d\udccb METHODOLOGY", {
+    "Inspection Approach": [
+      ["Engagement scope confirmed in writing", 5, ""],
+      ["Inspection limitations agreed", 5, ""],
+      ["Equipment list documented (moisture meter etc)", 3, ""],
+      ["Weather conditions recorded", 2, ""],
+      ["Property occupancy status", 2, ""],
+      ["Inspection access constraints", 4, ""],
+      ["Multiple visits if needed", 2, ""],
+      ["Stakeholder interviews recorded", 3, ""],
+    ],
+  });
+  totalAdded += addGroup("SpecialPurpose", "\ud83d\udd2c EVIDENCE STANDARDS", {
+    "Documentation Quality": [
+      ["Reference scale in every macro photo", 4, ""],
+      ["Photo date/time/GPS metadata preserved", 4, ""],
+      ["Video walkthrough recorded", 3, ""],
+      ["Drone footage for elevations", 3, ""],
+      ["Thermal imaging if useful", 3, ""],
+      ["Moisture meter readings tabulated", 4, ""],
+      ["Crack monitoring telltales (if relevant)", 3, ""],
+      ["Triangulation reference points", 3, ""],
+      ["Witness statements documented", 3, ""],
+      ["Invoice/spec evidence collected", 3, ""],
+    ],
+  });
+  totalAdded += addGroup("SpecialPurpose", "\ud83d\udcda STANDARDS CITATION", {
+    "Authoritative References": [
+      ["Australian Standards relevant cited", 5, ""],
+      ["NCC clauses with edition year", 5, "NCC"],
+      ["Building Regulations 2018 referenced", 5, "BR 2018"],
+      ["GST&T 2015 cited where applicable", 4, ""],
+      ["CSIRO BCC 21 for cracks", 4, "CSIRO BCC 21"],
+      ["Manufacturer specifications cited", 3, ""],
+      ["Case law / VCAT precedents (if dispute)", 3, ""],
+      ["VBA practice notes referenced", 3, ""],
+    ],
+  });
+  totalAdded += addGroup("SpecialPurpose", "\u2696\ufe0f EXPERT OPINION FRAMEWORK", {
+    "Forming Conclusions": [
+      ["Cause vs effect distinguished", 5, ""],
+      ["Multiple causes considered", 4, ""],
+      ["Probability language (likely/possibly)", 4, ""],
+      ["Alternative explanations addressed", 4, ""],
+      ["Inspector qualifications relevant", 4, ""],
+      ["No advocacy beyond expertise", 5, ""],
+      ["Independence declared", 5, ""],
+      ["Conflict of interest declared / absent", 5, ""],
+    ],
+  });
+  totalAdded += addGroup("SpecialPurpose", "\ud83d\udcd1 REPORT STRUCTURE", {
+    "Output Requirements": [
+      ["Executive summary 1 page", 4, ""],
+      ["Background and scope section", 4, ""],
+      ["Methodology section", 4, ""],
+      ["Findings tabulated with severity", 5, ""],
+      ["Recommendations prioritised", 5, ""],
+      ["Cost estimates range with disclaimer", 3, ""],
+      ["Appendix with photo log", 4, ""],
+      ["Appendix with standards", 3, ""],
+      ["Limitations and caveats section", 5, ""],
+      ["Signed and dated", 5, ""],
+      ["Inspector credentials and insurance", 5, ""],
+    ],
+  });
+
+  /* ===== AESMR ===== */
+  totalAdded += addGroup("AESMR", "\ud83d\udd27 MAINTENANCE CONTRACTOR RECORDS", {
+    "Contractor Audit": [
+      ["Contractor licence numbers verified", 4, ""],
+      ["Contractor insurance current", 4, ""],
+      ["Contractor competency for system class", 4, "AS 1851"],
+      ["Service tag matches contractor records", 4, "AS 1851"],
+      ["Service intervals per AS 1851", 5, "AS 1851"],
+      ["Defect rectification timelines met", 4, "AS 1851"],
+      ["Contractor reports filed with owner", 4, ""],
+    ],
+  });
+  totalAdded += addGroup("AESMR", "\ud83d\udcd6 LOGBOOK AUDIT", {
+    "Logbook Compliance": [
+      ["Logbook present on premises", 5, "BR 2018 r217"],
+      ["Logbook updated within 30 days of service", 5, "BR 2018 r217"],
+      ["Each ESM has entry in past 12 months", 5, "BR 2018 r217"],
+      ["Defects entered with rectification status", 5, "BR 2018 r217"],
+      ["Building owner signature on logbook", 4, "BR 2018 r217"],
+      ["AS 1851 referenced in entries", 4, "AS 1851"],
+      ["Logbook retention 7 years", 4, "BR 2018 r217"],
+    ],
+  });
+  totalAdded += addGroup("AESMR", "\u26a0\ufe0f NON-CONFORMANCE TRACKING", {
+    "Issues & Resolution": [
+      ["Non-conformances listed with severity", 5, ""],
+      ["Rectification timeframes assigned", 5, ""],
+      ["Owner aware of urgent items", 5, ""],
+      ["Trend analysis vs previous AESMRs", 3, ""],
+      ["Repeat issues identified", 4, ""],
+      ["Building Order risk flagged", 4, "Building Act 1993"],
+    ],
+  });
+  totalAdded += addGroup("AESMR", "\ud83d\udc65 OWNER EDUCATION", {
+    "Building Owner Responsibilities": [
+      ["Building owner aware of ESM obligations", 4, ""],
+      ["Annual maintenance budget recommended", 3, ""],
+      ["Tenant information re fire safety", 3, ""],
+      ["Fire safety training records", 3, ""],
+      ["Evacuation drill records", 3, ""],
+      ["Emergency plan current", 4, ""],
+      ["Fire warden appointments", 3, ""],
+    ],
+  });
+
+  console.log("[Phase Q] Added " + totalAdded + " new items in fresh groups across libraries.");
+})();
+
+/* ============================================================
+   PHASE Q.1 — DEDICATED RETAINING WALL INSPECTION
+   Standalone inspection type appears in the type switcher.
+   AS 4678 / CSIRO BCC 21 / BR 2018 / NCC.
+   ============================================================ */
+(function addRetainingWallInspection() {
+  if (!window.INSPECTION_LIBRARY) { setTimeout(addRetainingWallInspection, 100); return; }
+  if (window.INSPECTION_LIBRARY['RetainingWall']) return; /* already loaded */
+
+  const groups = {
+    'IDENTIFICATION & DESIGN': {
+      'Wall Identification': [
+        ['Number of separate retaining walls on site', 3, ''],
+        ['Wall location described (front/side/rear/internal)', 3, ''],
+        ['Wall height measured each section (max)', 4, 'AS 4678'],
+        ['Wall length measured each section', 3, ''],
+        ['Wall material — masonry/timber/concrete/steel/gabion/dry stone', 3, 'AS 4678'],
+        ['Wall age estimated', 2, ''],
+        ['Site plan annotated with each wall', 3, ''],
+        ['Photo each elevation of each wall', 4, ''],
+        ['Wall is structural vs decorative classification', 3, 'AS 4678'],
+      ],
+      'Design & Permit Status': [
+        ['Wall over 1m height — Building Permit required', 5, 'BR 2018'],
+        ['Wall over 1m + surcharge — engineer designed', 5, 'AS 4678'],
+        ['Engineer design certificate on file', 5, 'AS 4678'],
+        ['Engineer Form 6 / Design Cert documented', 5, 'AS 4678'],
+        ['Design surcharge loads noted', 4, 'AS 4678'],
+        ['Reg 87 exemption check (≤ 1m, no surcharge)', 4, 'BR 2018 r87'],
+        ['Geotechnical report on file (if engineered)', 4, 'AS 4678'],
+        ['As-built matches engineer design', 5, 'AS 4678'],
+        ['No site modifications to engineered wall', 5, 'AS 4678'],
+        ['Repairs or alterations evident — permit history', 3, ''],
+      ],
+    },
+    '✅ MANDATORY INSPECTIONS (BR 2018)': {
+      'Stage 1 — Excavation & Setout': [
+        ['Form 10 Notice lodged with RBS before stage', 5, 'BR 2018 r170'],
+        ['Setback dimensions verified before excavation', 5, 'BR 2018 r79'],
+        ['Excavation depth matches engineer design', 5, 'AS 4678'],
+        ['Excavation width matches engineer design', 4, 'AS 4678'],
+        ['Excavation bottom clean — no loose soil', 4, 'AS 4678'],
+        ['Bearing soil exposed and competent', 5, 'AS 2870'],
+        ['Soft spots / unsuitable material removed', 5, 'AS 4678'],
+        ['Water in excavation pumped out before pour', 4, ''],
+        ['Sides of trench stable / shored if unstable', 4, 'AS 3798'],
+        ['Adjacent foundations protected', 5, 'AS 3798'],
+        ['No services in excavation zone (Dial Before You Dig)', 5, ''],
+        ['Geotech engineer attended (if H-class / fill)', 4, 'AS 2870'],
+        ['Photo log of excavation pre-pour', 4, ''],
+        ['Inspection booked with RBS', 5, 'BR 2018 r170'],
+        ['RBS Form 16 issued post-stage', 5, 'BR 2018 r170'],
+      ],
+      'Stage 2 — Footing / Foundation Pre-Pour': [
+        ['Form 10 Notice lodged with RBS', 5, 'BR 2018 r170'],
+        ['Engineer footing design on site', 5, 'AS 4678'],
+        ['Footing depth into competent soil verified', 5, 'AS 2870'],
+        ['Footing dimensions (width × depth) per design', 5, 'AS 4678'],
+        ['Reinforcement bar grade matches engineer spec', 5, 'AS 3600'],
+        ['Reinforcement bar diameters verified', 5, 'AS 3600'],
+        ['Reinforcement bar spacing measured', 4, 'AS 3600'],
+        ['Lap lengths per AS 3600', 4, 'AS 3600'],
+        ['Starter bars projecting per design (height/lap)', 5, 'AS 3600'],
+        ['Concrete cover — bottom 50mm minimum', 4, 'AS 3600'],
+        ['Concrete cover — sides 40mm minimum', 4, 'AS 3600'],
+        ['Bar chairs at correct spacing (max 1m)', 4, 'AS 3600'],
+        ['No bars cut on site without engineer approval', 5, 'AS 3600'],
+        ['Termite barrier under structural wall (if to dwelling)', 4, 'AS 3660.1'],
+        ['Service penetrations sleeved where required', 4, ''],
+        ['Engineer pre-pour certificate signed', 5, 'AS 4678'],
+        ['Photos of reinforcement before pour', 5, ''],
+        ['Concrete mix design min N25 / N32 per spec', 4, 'AS 3600'],
+        ['Slump test arranged on pour day', 3, 'AS 1379'],
+        ['Cylinder tests arranged for QA', 3, 'AS 1012'],
+        ['Inspection booked with RBS', 5, 'BR 2018 r170'],
+        ['RBS Form 16 issued post-stage', 5, 'BR 2018 r170'],
+      ],
+      'Stage 3 — Wall Construction Pre-Backfill': [
+        ['Form 10 Notice lodged with RBS', 5, 'BR 2018 r170'],
+        ['Wall plumb measured each section', 5, 'AS 4678'],
+        ['Wall height matches design', 5, 'AS 4678'],
+        ['Vertical reinforcement (masonry) per design', 5, 'AS 3700'],
+        ['Horizontal bond beam reinforcement', 5, 'AS 3700'],
+        ['Reinforcement grouted fully (no voids)', 5, 'AS 3700'],
+        ['Wall ties / anchors / dowels installed correctly', 5, 'AS 4678'],
+        ['Tieback / soil nail installation (if required)', 5, 'AS 4678'],
+        ['Mortar mix per engineer spec (masonry)', 4, 'AS 3700'],
+        ['Mortar joint thickness 10mm ± 3mm', 3, 'AS 3700'],
+        ['Concrete pour quality (formed wall)', 5, 'AS 3600'],
+        ['Form ties at correct centres', 4, 'AS 3600'],
+        ['Timber sleeper grade and treatment verified', 5, 'AS 1604'],
+        ['Sleeper-to-post connection per design', 5, 'AS 4678'],
+        ['Steel post embedment depth verified', 5, 'AS 4678'],
+        ['Gabion basket fill — angular rock per spec', 4, 'AS 4678'],
+        ['Cap or coping installed', 3, ''],
+        ['Weep holes formed (count and location)', 5, 'AS 4678'],
+        ['Weep hole protection (vermin grilles)', 3, ''],
+        ['Sub-soil Ag-pipe laid behind wall', 5, 'AS 4678'],
+        ['Filter fabric installed before backfill', 4, 'AS 4678'],
+        ['Free-draining gravel zone behind wall', 4, 'AS 4678'],
+        ['Photos before backfill (essential)', 5, ''],
+        ['Engineer site inspection certificate', 5, 'AS 4678'],
+        ['Inspection booked with RBS', 5, 'BR 2018 r170'],
+        ['RBS Form 16 issued post-stage', 5, 'BR 2018 r170'],
+      ],
+      'Stage 4 — Drainage & Backfill': [
+        ['Form 10 Notice lodged with RBS', 5, 'BR 2018 r170'],
+        ['Sub-soil drain connected to discharge point', 5, 'AS 3500.3'],
+        ['Discharge point — LPOD or soak well legal', 5, 'AS 3500.3'],
+        ['Free-draining backfill (gravel/scoria) zone', 5, 'AS 4678'],
+        ['Geofabric over drainage zone', 4, 'AS 4678'],
+        ['Backfill compacted in layers per engineer', 5, 'AS 4678'],
+        ['Compaction tests if required by design', 4, 'AS 4678'],
+        ['No heavy plant compacting near wall (induces overload)', 5, 'AS 4678'],
+        ['Topsoil/finishing layer to design level', 3, ''],
+        ['Surface fall away from wall top', 4, ''],
+        ['Photos during each backfill lift', 4, ''],
+        ['Inspection booked with RBS', 5, 'BR 2018 r170'],
+        ['RBS Form 16 issued post-stage', 5, 'BR 2018 r170'],
+      ],
+      'Stage 5 — Final / Completion': [
+        ['Form 10 Notice lodged with RBS', 5, 'BR 2018 r170'],
+        ['Wall final condition photographed', 5, ''],
+        ['No movement, cracking, or settlement', 5, 'AS 4678'],
+        ['Weep holes clear and discharging', 5, 'AS 4678'],
+        ['Sub-soil drainage discharging at outlet', 5, 'AS 3500.3'],
+        ['Safety barrier installed if drop > 1m', 5, 'NCC D2D18'],
+        ['Safety barrier compliant (height/gaps/non-climbable)', 5, 'NCC D2D18'],
+        ['Pool barrier interaction (if pool nearby)', 5, 'AS 1926.1'],
+        ['Backfill complete to design level', 4, ''],
+        ['Surface drainage diverting water from wall', 4, ''],
+        ['Adjoining property — no damage incurred', 5, ''],
+        ['Engineer Form 6 / Compliance Cert lodged', 5, 'AS 4678'],
+        ['As-built drawings handed over', 4, ''],
+        ['Maintenance recommendations to owner', 3, ''],
+        ['Final RBS inspection booked', 5, 'BR 2018 r170'],
+        ['RBS Form 16 Final issued', 5, 'BR 2018 r170'],
+        ['Occupancy Permit / CFI issued (if part of OP)', 5, 'BR 2018'],
+      ],
+      'Mandatory Inspection Documentation': [
+        ['Form 10 Notice lodged for each stage', 5, 'BR 2018 r170'],
+        ['Form 16 issued by RBS at each stage', 5, 'BR 2018 r170'],
+        ['Engineer site visit certificates filed', 5, 'AS 4678'],
+        ['Photo log indexed per stage', 4, ''],
+        ['Engineer Form 6 design + construction sign-off', 5, 'AS 4678'],
+        ['Compliance Cert — drainage plumber (if required)', 4, 'AS 3500.3'],
+        ['Geotechnical site classification (if applicable)', 4, 'AS 2870'],
+        ['Building Permit + approved plans on file', 5, 'BR 2018'],
+        ['Variations engineer-approved in writing', 5, 'AS 4678'],
+        ['Final certification package to owner', 5, ''],
+      ],
+    },
+    'STRUCTURAL CONDITION': {
+      'Wall Movement': [
+        ['Wall lean measured (plumb bob or digital level)', 4, 'AS 4678'],
+        ['Lean exceeding 1:50 — engineer review', 5, 'AS 4678'],
+        ['Wall bow / bulging — magnitude and location', 4, 'AS 4678'],
+        ['Tilting away from retained soil', 5, 'AS 4678'],
+        ['Movement at corners or returns', 4, ''],
+        ['Settlement at base of wall', 4, ''],
+        ['Differential movement between sections', 4, 'CSIRO BCC 21'],
+        ['Wall plumbness on each elevation', 3, ''],
+      ],
+      'Cracks & Fractures': [
+        ['Cracks measured with crack gauge', 4, 'CSIRO BCC 21'],
+        ['Cracks classified Category 0-4', 4, 'CSIRO BCC 21'],
+        ['Crack widths > 5mm — engineer assessment urgent', 5, 'CSIRO BCC 21'],
+        ['Vertical cracks vs diagonal cracks distinguished', 4, ''],
+        ['Through-cracks vs surface cracks', 4, ''],
+        ['Crack monitoring tells recommended', 3, ''],
+        ['Photo each crack with scale', 4, ''],
+        ['Crack widths trending over time (if known)', 4, ''],
+      ],
+      'Material-Specific Condition': [
+        ['Masonry — mortar joint condition', 3, 'AS 3700'],
+        ['Masonry — efflorescence / salt staining', 3, ''],
+        ['Masonry — spalling or surface degradation', 3, 'AS 3700'],
+        ['Masonry — repointing required', 3, 'AS 3700'],
+        ['Timber — treatment (H4 / H5 / CCA / ACQ)', 4, 'AS 1604'],
+        ['Timber — rot at ground contact', 4, 'AS 4349.3'],
+        ['Timber — termite damage', 5, 'AS 4349.3'],
+        ['Timber — fastener corrosion', 3, ''],
+        ['Concrete — cracking, spalling, exposed rebar', 4, 'AS 3600'],
+        ['Concrete — efflorescence indicating drainage failure', 4, ''],
+        ['Steel — corrosion at base / connections', 4, 'AS 4100'],
+        ['Steel — galvanising condition', 3, 'AS 4680'],
+        ['Gabion baskets — wire corrosion', 4, 'AS 4678'],
+        ['Gabion baskets — filling settlement', 4, 'AS 4678'],
+        ['Dry stone — stone displacement', 3, ''],
+        ['Render or coating condition', 2, ''],
+      ],
+      'Connections & Reinforcement': [
+        ['Wall ties / anchors / soldier piles visible', 3, 'AS 4678'],
+        ['Tieback / soil nail evidence', 4, 'AS 4678'],
+        ['Cap or coping secure', 2, ''],
+        ['Return walls and corner connections', 3, ''],
+        ['Buttress walls (if present) condition', 4, 'AS 4678'],
+        ['Counterforts (if present) condition', 4, 'AS 4678'],
+      ],
+    },
+    'DRAINAGE & HYDRAULICS': {
+      'Weep Holes & Sub-Soil Drainage': [
+        ['Weep holes — present and clear', 4, 'AS 4678'],
+        ['Weep holes spaced ≤ 1200mm', 4, 'AS 4678'],
+        ['Weep holes at base of wall', 4, 'AS 4678'],
+        ['Weep holes blocked by mortar/render', 4, 'AS 4678'],
+        ['Sub-soil drain (Ag-pipe) visible at base', 4, 'AS 4678'],
+        ['Sub-soil drain outlet — accessible discharge', 4, 'AS 3500.3'],
+        ['Filter fabric behind wall (where visible)', 3, 'AS 4678'],
+        ['Free-draining backfill (gravel/scoria)', 3, 'AS 4678'],
+        ['No fines / clay backfill against wall', 4, 'AS 4678'],
+      ],
+      'Surface Water & Failure Signs': [
+        ['Surface water diverted away from top of wall', 3, ''],
+        ['No pooling at top of wall', 3, ''],
+        ['No pooling at base of wall', 3, ''],
+        ['Hydrostatic staining / efflorescence pattern', 4, 'AS 4678'],
+        ['Saturated soil behind wall', 4, ''],
+        ['Vegetation root penetration in drainage', 3, ''],
+        ['Mud/silt issuing from weep holes', 3, ''],
+        ['Recent flood / heavy rain damage', 4, ''],
+      ],
+    },
+    'FOUNDATIONS & BASE': {
+      'Footing Condition': [
+        ['Footing exposure (where visible)', 3, 'AS 4678'],
+        ['Footing toe protection from erosion', 4, 'AS 4678'],
+        ['Erosion at base of wall', 4, 'AS 4678'],
+        ['Undermining of footing — urgent', 5, 'AS 4678'],
+        ['Footing depth into competent soil', 4, 'AS 4678'],
+        ['Footing material visible (concrete / sleeper base)', 3, ''],
+      ],
+      'Soil & Ground Conditions': [
+        ['Adjacent ground falls toward wall', 3, ''],
+        ['Bearing soil condition (visual assessment)', 3, 'AS 4678'],
+        ['Slip surface or failure plane evident', 5, 'AS 4678'],
+        ['Sinkholes or voids near wall', 5, ''],
+        ['Soil heave on retained side (lateral pressure)', 5, 'AS 4678'],
+        ['Ground subsidence behind wall', 4, ''],
+        ['Reactive clay zones (Vic typically M-H1 class)', 3, 'AS 2870'],
+      ],
+    },
+    'SITE & SURROUNDINGS': {
+      'Boundaries & Property': [
+        ['Wall on or near title boundary', 4, ''],
+        ['Encroachment onto adjoining property', 4, ''],
+        ['Easement encroachment', 4, ''],
+        ['Adjoining owner notification (if works)', 3, ''],
+        ['Section 84-87 Building Act implications', 3, 'Building Act 1993'],
+      ],
+      'Surcharge & Loading': [
+        ['Surcharge from above — driveway / vehicles', 5, 'AS 4678'],
+        ['Surcharge from above — pool / paving', 5, 'AS 4678'],
+        ['Surcharge from above — building footings', 5, 'AS 4678'],
+        ['Trees within 5m — root surcharge / windthrow', 3, ''],
+        ['Vehicle access loading wall top zone', 4, 'AS 4678'],
+        ['Pool proximity — special design considered', 5, 'AS 4678'],
+        ['Fence on top of wall — additional load', 3, 'AS 4678'],
+      ],
+      'Safety Compliance': [
+        ['Safety barrier required if drop > 1m', 5, 'NCC D2D18'],
+        ['Safety barrier height ≥ 1m above top of wall', 5, 'NCC D2D18'],
+        ['Balustrade gaps ≤ 125mm', 5, 'NCC D2D18'],
+        ['No climbable elements 150-760mm AFFL', 4, 'NCC D2D18'],
+        ['Pool barrier compliance if part of barrier', 5, 'AS 1926.1'],
+        ['Steps in wall — riser/tread compliance', 4, 'NCC D2D17'],
+      ],
+    },
+    'DOCUMENTS': {
+      'Compliance Records': [
+        ['Building permit (if > 1m height)', 5, 'BR 2018'],
+        ['Engineer Form 6 / Design Certificate', 5, 'AS 4678'],
+        ['Engineer Site Visit Certificate (if applicable)', 4, 'AS 4678'],
+        ['Geotechnical report', 4, 'AS 4678'],
+        ['Drainage plan', 3, 'AS 3500.3'],
+        ['Manufacturer warranties (gabion/precast)', 3, ''],
+        ['Maintenance records', 2, ''],
+        ['Previous engineer assessment reports', 3, ''],
+      ],
+    },
+    'LIMITATIONS & RECOMMENDATIONS': {
+      'Inspection Limitations': [
+        ['Concealed rear of wall — backfill obscures', 3, ''],
+        ['Sub-soil drainage performance unconfirmed', 3, ''],
+        ['Footing depth assumed (no excavation)', 3, ''],
+        ['No destructive testing performed', 3, ''],
+        ['Soil bearing capacity not tested', 3, ''],
+        ['Adjacent property access not granted (if relevant)', 3, ''],
+      ],
+      'Recommended Actions': [
+        ['Engineer assessment recommended (high-risk walls)', 4, 'AS 4678'],
+        ['Geotechnical investigation recommended', 4, 'AS 4678'],
+        ['Crack monitoring telltales install', 3, ''],
+        ['Surcharge load reduction recommendation', 4, 'AS 4678'],
+        ['Drainage upgrade recommendation', 4, 'AS 4678'],
+        ['Reconstruct / replace recommendation', 4, 'AS 4678'],
+        ['Annual inspection recommended (high walls)', 3, ''],
+        ['Stop loading recommendation (signs of failure)', 5, 'AS 4678'],
+        ['Adjacent excavation precautions noted', 4, 'AS 3798'],
+      ],
+    },
+  };
+
+  /* Build into a proper INSPECTION_LIBRARY entry */
+  const grpArr = [];
+  let totalItems = 0;
+  Object.keys(groups).forEach(groupName => {
+    const locs = groups[groupName];
+    const grp = { name: groupName, locations: [] };
+    Object.keys(locs).forEach(locName => {
+      const items = locs[locName];
+      const slug = locName.toLowerCase().replace(/[^a-z0-9]+/g, '_');
+      grp.locations.push({
+        location: locName,
+        items: items.map((it, i) => ({
+          key: 'rw_' + slug + '_' + i,
+          label: it[0],
+          sev: it[1] || 2,
+          ref: it[2] || '',
+          level: 'std'
+        }))
+      });
+      totalItems += items.length;
+    });
+    grpArr.push(grp);
+  });
+
+  window.INSPECTION_LIBRARY['RetainingWall'] = {
+    name: 'Retaining Wall Inspection (AS 4678)',
+    standard: 'AS 4678 / CSIRO BCC 21 / BR 2018 / NCC D2D18',
+    groups: grpArr
+  };
+
+  console.log('[Phase Q.1] Retaining Wall inspection added — ' + totalItems + ' items across ' + grpArr.length + ' groups');
+})();
 
 console.log("[Phase P] Loaded: " + Object.keys(INSPECTION_LIBRARY).length + " inspection libraries");
 
